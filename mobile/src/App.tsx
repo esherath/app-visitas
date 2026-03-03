@@ -61,6 +61,11 @@ type VisitItem = PendingVisit & {
   client?: { id: string; name: string };
   seller?: { id: string; name: string; email: string };
 };
+type VisitCoordinate = {
+  latitude: number;
+  longitude: number;
+};
+const MAX_MAP_MARKERS = 300;
 
 function makeLocalVisitId() {
   return `local-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
@@ -116,6 +121,20 @@ function parseInputDate(value: string, end = false) {
     return null;
   }
   return end ? endOfDay(parsed) : startOfDay(parsed);
+}
+
+function toValidCoordinate(input: { latitude: unknown; longitude: unknown }): VisitCoordinate | null {
+  const latitude = Number(input.latitude);
+  const longitude = Number(input.longitude);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    return null;
+  }
+
+  return { latitude, longitude };
 }
 
 export default function App() {
@@ -250,6 +269,25 @@ export default function App() {
     }
     return Array.from(byId.values());
   }, [filteredLocalHistory, filteredServerHistory]);
+  const mapMarkers = useMemo(
+    () =>
+      mapPoints
+        .map((visit) => {
+          const coordinate = toValidCoordinate(visit);
+          if (!coordinate) {
+            return null;
+          }
+          return { visit, coordinate };
+        })
+        .filter((item): item is { visit: PendingVisit; coordinate: VisitCoordinate } => item !== null)
+        .sort((a, b) => new Date(b.visit.checkInAt).getTime() - new Date(a.visit.checkInAt).getTime())
+        .slice(0, MAX_MAP_MARKERS),
+    [mapPoints]
+  );
+  const historyDetailCoordinate = useMemo(
+    () => (historyDetail ? toValidCoordinate(historyDetail) : null),
+    [historyDetail]
+  );
 
   const displayedHistory = historySource === "LOCAL" ? filteredLocalHistory : filteredServerHistory;
   const filteredManagerHistory = useMemo(
@@ -956,22 +994,23 @@ export default function App() {
         {activeTab === "MAPA" && (
           <View style={styles.form}>
             <Text style={styles.label}>Pontos de visitas realizadas no periodo filtrado</Text>
-            {mapPoints.length ? (
+            {mapMarkers.length ? (
               <MapView
                 style={styles.map}
+                liteMode={Platform.OS === "android"}
                 initialRegion={{
-                  latitude: mapPoints[0].latitude,
-                  longitude: mapPoints[0].longitude,
+                  latitude: mapMarkers[0].coordinate.latitude,
+                  longitude: mapMarkers[0].coordinate.longitude,
                   latitudeDelta: 0.02,
                   longitudeDelta: 0.02
                 }}
               >
-                {mapPoints.map((point) => (
+                {mapMarkers.map(({ visit, coordinate }) => (
                     <Marker
-                      key={point.localVisitId}
-                      coordinate={{ latitude: point.latitude, longitude: point.longitude }}
-                      title={getVisitDisplayName(point)}
-                      description={new Date(point.checkInAt).toLocaleString()}
+                      key={visit.localVisitId}
+                      coordinate={coordinate}
+                      title={getVisitDisplayName(visit)}
+                      description={new Date(visit.checkInAt).toLocaleString()}
                     />
                 ))}
               </MapView>
@@ -981,6 +1020,9 @@ export default function App() {
             <Text style={styles.caption}>
               Offline: a captura GPS continua funcionando sem rede. O mapa depende dos tiles disponiveis no aparelho.
             </Text>
+            {mapMarkers.length >= MAX_MAP_MARKERS ? (
+              <Text style={styles.caption}>Mostrando os 300 pontos mais recentes para manter estabilidade.</Text>
+            ) : null}
           </View>
         )}
 
@@ -1155,6 +1197,7 @@ export default function App() {
           visible={Boolean(historyDetail)}
           transparent
           animationType="slide"
+          hardwareAccelerated
           onRequestClose={() => setHistoryDetail(null)}
         >
           <View style={styles.modalBackdrop}>
@@ -1172,24 +1215,24 @@ export default function App() {
                 <Text style={styles.historySub}>Vendedor: {historyDetail.seller.name}</Text>
               ) : null}
               <Text style={styles.historySub}>{historyDetail?.notes}</Text>
-              {historyDetail ? (
+              {historyDetail && historyDetailCoordinate ? (
                 <MapView
                   style={styles.detailMap}
+                  liteMode={Platform.OS === "android"}
                   initialRegion={{
-                    latitude: historyDetail.latitude,
-                    longitude: historyDetail.longitude,
+                    latitude: historyDetailCoordinate.latitude,
+                    longitude: historyDetailCoordinate.longitude,
                     latitudeDelta: 0.01,
                     longitudeDelta: 0.01
                   }}
                 >
                   <Marker
-                    coordinate={{
-                      latitude: historyDetail.latitude,
-                      longitude: historyDetail.longitude
-                    }}
+                    coordinate={historyDetailCoordinate}
                     title={getVisitDisplayName(historyDetail)}
                   />
                 </MapView>
+              ) : historyDetail ? (
+                <Text style={styles.caption}>Coordenada invalida para exibir no mapa.</Text>
               ) : null}
 
               {activeTab === "HISTORICO" && historySource === "LOCAL" && historyDetail?.syncStatus === "FAILED" ? (

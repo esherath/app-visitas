@@ -18,7 +18,10 @@
       "expo-secure-store"
     ],
     "extra": {
-      "apiBaseUrl": "http://10.0.2.2:4000"
+      "apiBaseUrl": "http://10.0.2.2:4000",
+      "eas": {
+        "projectId": "260e17dc-b7e6-43ac-9a7e-beb475c73f54"
+      }
     }
   }
 }
