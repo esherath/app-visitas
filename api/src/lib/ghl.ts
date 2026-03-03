@@ -1,0 +1,62 @@
+type CreateNoteInput = {
+  contactId: string;
+  body: string;
+};
+
+type GhlNoteResponse = {
+  id?: string;
+};
+
+export const apiBase = process.env.GHL_API_BASE_URL;
+export const locationId = process.env.GHL_LOCATION_ID;
+export const accessToken = process.env.GHL_ACCESS_TOKEN;
+
+function getHeaders() {
+  if (!accessToken) {
+    throw new Error("Missing GHL env var: GHL_ACCESS_TOKEN");
+  }
+
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    Version: "2021-07-28",
+    "Content-Type": "application/json"
+  };
+}
+
+export function getGhlHeaders() {
+  return getHeaders();
+}
+
+export function getGhlConfig() {
+  if (!apiBase || !locationId || !accessToken) {
+    throw new Error("Missing GHL env vars: GHL_API_BASE_URL, GHL_LOCATION_ID or GHL_ACCESS_TOKEN");
+  }
+
+  return {
+    apiBase,
+    locationId,
+    accessToken
+  };
+}
+
+export async function createGhlContactNote(input: CreateNoteInput): Promise<GhlNoteResponse> {
+  if (!apiBase) {
+    throw new Error("Missing env var GHL_API_BASE_URL");
+  }
+
+  const response = await fetch(`${apiBase}/contacts/${input.contactId}/notes`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      body: input.body
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`GHL note request failed: ${response.status} ${text}`);
+  }
+
+  const json = (await response.json()) as GhlNoteResponse;
+  return json;
+}

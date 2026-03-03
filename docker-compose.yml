@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: trinit-visitas-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: trinit_visitas
+    ports:
+      - "5432:5432"
+    volumes:
+      - trinit_visitas_pgdata:/var/lib/postgresql/data
+
+volumes:
+  trinit_visitas_pgdata:

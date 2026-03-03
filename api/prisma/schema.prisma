@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  passwordHash String?
+  role      String   @default("SELLER")
+  ghlUserId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  visits    Visit[]
+  clients   Client[]
+  ghlContacts GhlContact[]
+  ghlOpportunities GhlOpportunity[]
+}
+
+model Client {
+  id           String   @id @default(cuid())
+  name         String
+  externalRef  String?  @unique
+  ghlContactId String?  @unique
+  sellerId     String?
+  seller       User?    @relation(fields: [sellerId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  visits       Visit[]
+}
+
+model Visit {
+  id               String    @id @default(cuid())
+  localVisitId     String    @unique
+  sellerId         String
+  clientId         String
+  notes            String
+  checkInAt        DateTime
+  latitude         Float
+  longitude        Float
+  accuracyMeters   Float?
+  syncedAt         DateTime?
+  status           VisitStatus @default(PENDING)
+  ghlNoteId        String?
+  lastSyncError    String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  seller User   @relation(fields: [sellerId], references: [id])
+  client Client @relation(fields: [clientId], references: [id])
+}
+
+model GhlContact {
+  id                String   @id @default(cuid())
+  sellerId          String
+  ghlContactId      String
+  name              String
+  email             String?
+  phone             String?
+  ownerUserId       String?
+  sourceUpdatedAt   DateTime?
+  lastSyncedAt      DateTime @default(now())
+  rawJson           Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  seller        User             @relation(fields: [sellerId], references: [id])
+  opportunities GhlOpportunity[]
+
+  @@unique([sellerId, ghlContactId])
+  @@index([sellerId, name])
+}
+
+model GhlOpportunity {
+  id                 String   @id @default(cuid())
+  sellerId           String
+  ghlOpportunityId   String
+  ghlContactId       String?
+  title              String?
+  status             String?
+  stageId            String?
+  stageName          String?
+  monetaryValue      Float?
+  sourceUpdatedAt    DateTime?
+  lastSyncedAt       DateTime @default(now())
+  rawJson            Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  seller  User       @relation(fields: [sellerId], references: [id])
+  contact GhlContact? @relation(fields: [sellerId, ghlContactId], references: [sellerId, ghlContactId])
+
+  @@unique([sellerId, ghlOpportunityId])
+  @@index([sellerId, ghlContactId])
+}
+
+model SyncCursor {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+enum VisitStatus {
+  PENDING
+  SYNCED
+  FAILED
+}

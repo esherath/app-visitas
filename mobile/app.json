@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Trinit Visitas",
+    "slug": "trinit-visitas",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.trinit.visitas",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-location",
+      "expo-sqlite",
+      "expo-secure-store"
+    ],
+    "extra": {
+      "apiBaseUrl": "http://10.0.2.2:4000"
+    }
+  }
+}
