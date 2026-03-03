@@ -1,4 +1,4 @@
-# Trinit Visitas
+# App de Visitas (Vendedores de Campo - Setor de Agro)
 
 App para vendedores de campo registrarem visitas com GPS, suporte offline e sincronizacao com GHL.
 
