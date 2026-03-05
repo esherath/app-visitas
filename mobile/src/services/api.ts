@@ -5,6 +5,9 @@ type SyncPayload = {
     localVisitId: string;
     sellerId?: string;
     clientId: string;
+    clientName?: string;
+    clientEmail?: string;
+    clientPhone?: string;
     notes: string;
     checkInAt: string;
     latitude: number;
@@ -55,19 +58,19 @@ export async function fetchClients(ctx: RequestContext, query?: string): Promise
     params.set("q", query.trim());
   }
 
-  const response = await fetch(withBase(ctx.apiBaseUrl, `/api/ghl/contacts?${params.toString()}`), {
+  const response = await fetch(withBase(ctx.apiBaseUrl, `/api/clients?${params.toString()}`), {
     headers: authHeaders(ctx.token)
   });
   if (!response.ok) {
     throw new Error(`Clients API error ${response.status}`);
   }
-  const json = (await response.json()) as { contacts: ClientItem[] };
-  return json.contacts;
+  const json = (await response.json()) as { clients: ClientItem[] };
+  return json.clients;
 }
 
 export async function createClient(
   ctx: RequestContext,
-  payload: { name: string }
+  payload: { name: string; email?: string; phone?: string; localClientId?: string }
 ): Promise<ClientItem> {
   const response = await fetch(withBase(ctx.apiBaseUrl, "/api/clients"), {
     method: "POST",

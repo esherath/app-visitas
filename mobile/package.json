@@ -9,16 +9,16 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "build:android:preview": "eas build -p android --profile preview",
-    "build:android:production": "eas build -p android --profile production"
+    "build:android:preview": "npx eas-cli@latest build -p android --profile preview",
+    "build:android:production": "npx eas-cli@latest build -p android --profile production"
   },
   "dependencies": {
-    "@react-native-community/netinfo": "11.4.1",
     "@react-native-community/datetimepicker": "8.2.0",
+    "@react-native-community/netinfo": "11.4.1",
     "expo": "^54.0.0",
     "expo-constants": "~18.0.13",
-    "expo-location": "~19.0.8",
     "expo-linear-gradient": "~15.0.7",
+    "expo-location": "~19.0.8",
     "expo-secure-store": "~15.0.8",
     "expo-sqlite": "~16.0.10",
     "react": "19.1.0",

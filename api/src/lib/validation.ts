@@ -4,6 +4,9 @@ export const VisitSyncItemSchema = z.object({
   localVisitId: z.string().min(1),
   sellerId: z.string().min(1).optional(),
   clientId: z.string().min(1),
+  clientName: z.string().min(1).optional(),
+  clientEmail: z.string().email().optional(),
+  clientPhone: z.string().min(3).optional(),
   notes: z.string().min(1),
   checkInAt: z.string().datetime(),
   latitude: z.number().min(-90).max(90),
@@ -17,7 +20,10 @@ export const SyncRequestSchema = z.object({
 
 export const CreateClientSchema = z.object({
   sellerId: z.string().min(1).optional(),
+  localClientId: z.string().min(1).optional(),
   name: z.string().min(1),
+  email: z.string().email().optional(),
+  phone: z.string().min(3).optional(),
   externalRef: z.string().min(1).optional(),
   ghlContactId: z.string().min(1).optional()
 });

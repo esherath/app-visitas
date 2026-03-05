@@ -4,6 +4,8 @@ export type PendingVisit = {
   sellerId: string;
   clientId: string;
   clientName?: string | null;
+  clientEmail?: string | null;
+  clientPhone?: string | null;
   notes: string;
   checkInAt: string;
   latitude: number;
@@ -20,6 +22,7 @@ export type ClientItem = {
   name: string;
   email?: string | null;
   phone?: string | null;
+  isPending?: boolean;
   ghlContactId?: string | null;
   latestOpportunity?: {
     title?: string | null;

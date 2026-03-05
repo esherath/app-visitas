@@ -13,13 +13,16 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View
 } from "react-native";
 import NetInfo, { type NetInfoState } from "@react-native-community/netinfo";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
+import Constants from "expo-constants";
 import MapView, { Marker } from "react-native-maps";
 import { LinearGradient } from "expo-linear-gradient";
 import {
+  addClientToQueue,
   addVisitToQueue,
   countUnsyncedVisits,
   getCachedClients,
@@ -27,12 +30,14 @@ import {
   initDb,
   listRecentLocalVisits,
   replaceClientsCache,
-  setSetting
+  setSetting,
+  upsertClientCache
 } from "./db/database";
 import { getCurrentLocation } from "./services/location";
 import { retryVisitSync, syncPendingVisits } from "./services/sync";
 import { API_BASE_URL } from "./services/config";
 import {
+  createClient,
   fetchAdminSellers,
   fetchAdminVisits,
   fetchClients,
@@ -69,6 +74,10 @@ const MAX_MAP_MARKERS = 300;
 
 function makeLocalVisitId() {
   return `local-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+}
+
+function makeLocalClientId() {
+  return `local-client-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 }
 
 const TRINIT_LOGO_URL = "https://trinit.ind.br/wp-content/themes/trinit/assets/images/logo-trinit.svg";
@@ -112,17 +121,6 @@ function toIsoDateInput(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function parseInputDate(value: string, end = false) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return null;
-  }
-  const parsed = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-  return end ? endOfDay(parsed) : startOfDay(parsed);
-}
-
 function toValidCoordinate(input: { latitude: unknown; longitude: unknown }): VisitCoordinate | null {
   const latitude = Number(input.latitude);
   const longitude = Number(input.longitude);
@@ -138,6 +136,8 @@ function toValidCoordinate(input: { latitude: unknown; longitude: unknown }): Vi
 }
 
 export default function App() {
+  const { width } = useWindowDimensions();
+  const isTablet = width >= 768;
   const [activeTab, setActiveTab] = useState<ActiveTab>("VISITA");
   const [apiBaseUrl, setApiBaseUrl] = useState(API_BASE_URL);
   const [token, setToken] = useState<string | null>(null);
@@ -154,6 +154,11 @@ export default function App() {
   const [contactQuery, setContactQuery] = useState("");
   const [selectedClientId, setSelectedClientId] = useState("");
   const [visitModalVisible, setVisitModalVisible] = useState(false);
+  const [createClientModalVisible, setCreateClientModalVisible] = useState(false);
+  const [creatingClient, setCreatingClient] = useState(false);
+  const [newClientName, setNewClientName] = useState("");
+  const [newClientEmail, setNewClientEmail] = useState("");
+  const [newClientPhone, setNewClientPhone] = useState("");
   const [localHistory, setLocalHistory] = useState<PendingVisit[]>([]);
   const [serverHistory, setServerHistory] = useState<VisitItem[]>([]);
   const [managerHistory, setManagerHistory] = useState<AdminVisitItem[]>([]);
@@ -177,11 +182,23 @@ export default function App() {
   const [lastLocation, setLastLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [lastSyncText, setLastSyncText] = useState("Sem sincronizacao recente");
   const [logoFailed, setLogoFailed] = useState(false);
+  const googleMapsEnabled = Boolean(
+    (Constants.expoConfig?.extra as { googleMapsEnabled?: boolean } | undefined)?.googleMapsEnabled
+  );
+  const isExpoGo = Constants.appOwnership === "expo";
+  const canRenderMap = googleMapsEnabled || isExpoGo;
 
   const selectedClient = useMemo(
     () => clients.find((client) => client.id === selectedClientId),
     [clients, selectedClientId]
   );
+  const upsertClientInState = useCallback((nextClient: ClientItem) => {
+    setClients((previous) => {
+      const filtered = previous.filter((item) => item.id !== nextClient.id);
+      const merged = [nextClient, ...filtered];
+      return merged.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    });
+  }, []);
 
   const contactNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -392,13 +409,16 @@ export default function App() {
       const result = await syncPendingVisits(apiBaseUrl, token);
       await refreshLocalData();
       await refreshServerHistory();
+      if (contactQuery.trim().length >= 2) {
+        await refreshClients(contactQuery.trim());
+      }
       if (!result.skipped && !options?.silent) {
         Alert.alert("Sincronizacao", `Sincronizadas: ${result.synced} | Falhas: ${result.failed}`);
       }
       if (!result.skipped) {
         const now = new Date();
         setLastSyncText(
-          `${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${result.synced} ok / ${result.failed} falhas`
+          `${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} | ${result.synced} ok / ${result.failed} falhas`
         );
       }
     } catch (error) {
@@ -409,7 +429,7 @@ export default function App() {
     } finally {
       setSyncing(false);
     }
-  }, [apiBaseUrl, refreshLocalData, refreshServerHistory, token]);
+  }, [apiBaseUrl, contactQuery, refreshClients, refreshLocalData, refreshServerHistory, token]);
 
   const bootstrap = useCallback(async () => {
     await initDb();
@@ -475,6 +495,77 @@ export default function App() {
     }
     await refreshClients(query);
   }, [contactQuery, refreshClients]);
+
+  const handleCreateClient = useCallback(async () => {
+    if (!token || !user) {
+      return;
+    }
+
+    const name = newClientName.trim();
+    const email = newClientEmail.trim();
+    const phone = newClientPhone.trim();
+
+    if (!name) {
+      Alert.alert("Novo contato", "Informe o nome do cliente.");
+      return;
+    }
+
+    setCreatingClient(true);
+    try {
+      const netInfo = await NetInfo.fetch();
+      let client: ClientItem;
+
+      if (!netInfo.isConnected) {
+        const localClientId = makeLocalClientId();
+        await addClientToQueue({
+          localClientId,
+          sellerId: user.id,
+          name,
+          email: email || null,
+          phone: phone || null
+        });
+        client = {
+          id: localClientId,
+          name,
+          email: email || null,
+          phone: phone || null,
+          isPending: true
+        };
+        Alert.alert("Novo contato", "Contato salvo offline. Vamos transmitir ao GHL quando voltar a internet.");
+      } else {
+        client = await createClient(
+          { apiBaseUrl, token },
+          {
+            name,
+            email: email || undefined,
+            phone: phone || undefined
+          }
+        );
+        Alert.alert("Novo contato", "Contato criado e transmitido para o GHL.");
+      }
+
+      await upsertClientCache(user.id, client).catch(() => undefined);
+      upsertClientInState(client);
+      setSelectedClientId(client.id);
+      setCreateClientModalVisible(false);
+      setVisitModalVisible(true);
+      setNewClientName("");
+      setNewClientEmail("");
+      setNewClientPhone("");
+    } catch (error) {
+      Alert.alert("Novo contato", error instanceof Error ? error.message : "Falha ao criar contato.");
+    } finally {
+      setCreatingClient(false);
+    }
+  }, [
+    apiBaseUrl,
+    newClientEmail,
+    newClientName,
+    newClientPhone,
+    token,
+    upsertClientInState,
+    user
+  ]);
 
   const handleFromDateChange = useCallback((event: DateTimePickerEvent, date?: Date) => {
     setShowFromPicker(false);
@@ -562,6 +653,8 @@ export default function App() {
         sellerId: user.id,
         clientId: selectedClientId.trim(),
         clientName: selectedClient?.name ?? selectedClientId.trim(),
+        clientEmail: selectedClient?.email ?? null,
+        clientPhone: selectedClient?.phone ?? null,
         notes: visitNotes.trim(),
         checkInAt,
         latitude: location.latitude,
@@ -656,25 +749,31 @@ export default function App() {
 
   if (!token || !user) {
     return (
-      <SafeAreaView style={styles.container}>
-        <LinearGradient colors={["#0f3b2e", "#1f7a54"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.header}>
+      <SafeAreaView style={[styles.container, isTablet && styles.containerTablet]}>
+        <LinearGradient
+          colors={["#0f3b2e", "#1f7a54"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.header, isTablet && styles.headerTablet]}
+        >
           {!logoFailed ? (
             <Image
               source={{ uri: TRINIT_LOGO_URL }}
-              style={styles.logo}
+              style={[styles.logo, isTablet && styles.logoTablet]}
               resizeMode="contain"
               onError={() => setLogoFailed(true)}
             />
           ) : (
-            <Text style={styles.logoFallback}>TRINIT</Text>
+            <Text style={[styles.logoFallback, isTablet && styles.logoFallbackTablet]}>TRINIT</Text>
           )}
-          <Text style={styles.title}>Trinit Visitas</Text>
-          <Text style={styles.subtitle}>Acesso protegido</Text>
+          <Text style={[styles.brandPill, isTablet && styles.brandPillTablet]}>VField</Text>
+          <Text style={[styles.title, isTablet && styles.titleTablet]}>Gerenciador de Visitas</Text>
+          <Text style={[styles.subtitle, isTablet && styles.subtitleTablet]}>Acesso protegido</Text>
         </LinearGradient>
-        <View style={styles.contentWrap}>
-          <View style={styles.form}>
+        <View style={[styles.contentWrap, isTablet && styles.contentWrapTablet]}>
+          <View style={[styles.form, isTablet && styles.formTablet]}>
           <TextInput
-            style={styles.input}
+            style={[styles.input, isTablet && styles.inputTablet]}
             value={apiBaseUrl}
             onChangeText={setApiBaseUrl}
             placeholder="API Base URL"
@@ -682,7 +781,7 @@ export default function App() {
           />
           {authMode === "REGISTER" ? (
             <TextInput
-              style={styles.input}
+              style={[styles.input, isTablet && styles.inputTablet]}
               value={authName}
               onChangeText={setAuthName}
               placeholder="Nome"
@@ -690,7 +789,7 @@ export default function App() {
             />
           ) : null}
           <TextInput
-            style={styles.input}
+            style={[styles.input, isTablet && styles.inputTablet]}
             value={authEmail}
             onChangeText={setAuthEmail}
             placeholder="Email"
@@ -698,14 +797,14 @@ export default function App() {
             autoCapitalize="none"
           />
           <TextInput
-            style={styles.input}
+            style={[styles.input, isTablet && styles.inputTablet]}
             value={authPassword}
             onChangeText={setAuthPassword}
             placeholder="Senha"
             secureTextEntry
             autoCapitalize="none"
           />
-          <TouchableOpacity style={styles.button} onPress={handleAuth} disabled={authLoading}>
+          <TouchableOpacity style={[styles.button, isTablet && styles.buttonTablet]} onPress={handleAuth} disabled={authLoading}>
             {authLoading ? (
               <ActivityIndicator color="#fff" />
             ) : (
@@ -715,7 +814,7 @@ export default function App() {
             )}
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.button, styles.secondaryButton]}
+            style={[styles.button, styles.secondaryButton, isTablet && styles.buttonTablet]}
             onPress={() => setAuthMode((mode) => (mode === "LOGIN" ? "REGISTER" : "LOGIN"))}
           >
             <Text style={styles.secondaryText}>
@@ -729,40 +828,48 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <LinearGradient colors={["#0f3b2e", "#1f7a54"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.header}>
+    <SafeAreaView style={[styles.container, isTablet && styles.containerTablet]}>
+      <LinearGradient
+        colors={["#0f3b2e", "#1f7a54"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.header, isTablet && styles.headerTablet]}
+      >
         {!logoFailed ? (
           <Image
             source={{ uri: TRINIT_LOGO_URL }}
-            style={styles.logo}
+            style={[styles.logo, isTablet && styles.logoTablet]}
             resizeMode="contain"
             onError={() => setLogoFailed(true)}
           />
         ) : (
-          <Text style={styles.logoFallback}>TRINIT</Text>
+          <Text style={[styles.logoFallback, isTablet && styles.logoFallbackTablet]}>TRINIT</Text>
         )}
-        <Text style={styles.title}>Trinit Visitas</Text>
-        <Text style={styles.subtitle}>Usuario: {user.name}</Text>
-        <Text style={styles.syncText}>{lastSyncText}</Text>
-        <View style={styles.metricsRow}>
-          <View style={styles.metricChip}>
-            <Text style={styles.metricLabel}>Pendentes</Text>
-            <Text style={styles.metricValue}>{pendingCount}</Text>
+        <Text style={[styles.brandPill, isTablet && styles.brandPillTablet]}>VField</Text>
+        <Text style={[styles.title, isTablet && styles.titleTablet]}>Gerenciador de Visitas</Text>
+        <Text style={[styles.subtitle, isTablet && styles.subtitleTablet]}>Usuario: {user.name}</Text>
+        <Text style={[styles.syncText, isTablet && styles.syncTextTablet]}>{lastSyncText}</Text>
+        <View style={[styles.metricsRow, isTablet && styles.metricsRowTablet]}>
+          <View style={[styles.metricChip, isTablet && styles.metricChipTablet]}>
+            <Text style={[styles.metricLabel, isTablet && styles.metricLabelTablet]}>Pendentes</Text>
+            <Text style={[styles.metricValue, isTablet && styles.metricValueTablet]}>{pendingCount}</Text>
           </View>
-          <View style={styles.metricChip}>
-            <Text style={styles.metricLabel}>Rede</Text>
-            <Text style={styles.metricValue}>{online === null ? "..." : online ? "Online" : "Offline"}</Text>
+          <View style={[styles.metricChip, isTablet && styles.metricChipTablet]}>
+            <Text style={[styles.metricLabel, isTablet && styles.metricLabelTablet]}>Rede</Text>
+            <Text style={[styles.metricValue, isTablet && styles.metricValueTablet]}>
+              {online === null ? "..." : online ? "Online" : "Offline"}
+            </Text>
           </View>
         </View>
       </LinearGradient>
-      <View style={styles.tabs}>
+      <View style={[styles.tabs, isTablet && styles.tabsTablet]}>
         {availableTabs.map((tab) => (
           <Pressable
             key={tab}
-            style={[styles.tabButton, activeTab === tab && styles.tabButtonActive]}
+            style={[styles.tabButton, isTablet && styles.tabButtonTablet, activeTab === tab && styles.tabButtonActive]}
             onPress={() => setActiveTab(tab)}
           >
-            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+            <Text style={[styles.tabText, isTablet && styles.tabTextTablet, activeTab === tab && styles.tabTextActive]}>
               {tab === "GERENCIA" ? "GESTAO" : tab}
             </Text>
           </Pressable>
@@ -770,73 +877,87 @@ export default function App() {
       </View>
 
       <ScrollView style={styles.content}>
-        <View style={styles.contentWrap}>
+        <View style={[styles.contentWrap, isTablet && styles.contentWrapTablet]}>
         {activeTab === "VISITA" && (
-          <View style={styles.form}>
-            <View style={styles.panel}>
-              <Text style={styles.label}>Pesquise o contato para registrar a visita.</Text>
-              <View style={styles.searchRow}>
-                <TextInput
-                  style={[styles.input, styles.searchInput]}
-                  value={contactQuery}
-                  onChangeText={setContactQuery}
-                  placeholder="Nome, email ou telefone"
-                />
+          <View style={[styles.form, isTablet && styles.formTablet]}>
+            <View style={[styles.visitBody, isTablet && styles.visitBodyTablet]}>
+              <View style={[styles.visitPrimaryColumn, isTablet && styles.visitPrimaryColumnTablet]}>
+                <View style={[styles.panel, isTablet && styles.panelTablet]}>
+                  <Text style={[styles.label, isTablet && styles.labelTablet]}>Pesquise o contato para registrar a visita.</Text>
+                  <View style={styles.searchRow}>
+                    <TextInput
+                      style={[styles.input, styles.searchInput, isTablet && styles.inputTablet]}
+                      value={contactQuery}
+                      onChangeText={setContactQuery}
+                      placeholder="Nome, email ou telefone"
+                    />
+                    <TouchableOpacity
+                      style={[styles.button, styles.searchButton, isTablet && styles.buttonTablet]}
+                      onPress={handleSearchContacts}
+                      disabled={loadingClients}
+                    >
+                      {loadingClients ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <Text style={styles.buttonText}>Buscar</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.button, styles.secondaryButton, styles.newClientButton, isTablet && styles.buttonTablet]}
+                    onPress={() => setCreateClientModalVisible(true)}
+                  >
+                    <Text style={styles.secondaryText}>Criar cliente</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.caption}>Dica: digite ao menos 2 caracteres.</Text>
+                </View>
+
                 <TouchableOpacity
-                  style={[styles.button, styles.searchButton]}
-                  onPress={handleSearchContacts}
-                  disabled={loadingClients}
+                  style={[styles.button, styles.secondaryButton, syncing && styles.buttonDisabled, isTablet && styles.buttonTablet]}
+                  onPress={() => {
+                    runSync().catch(() => undefined);
+                  }}
+                  disabled={syncing}
                 >
-                  {loadingClients ? (
-                    <ActivityIndicator color="#fff" />
+                  {syncing ? (
+                    <ActivityIndicator color="#111" />
                   ) : (
-                    <Text style={styles.buttonText}>Buscar</Text>
+                    <Text style={styles.secondaryText}>Sincronizar agora</Text>
                   )}
                 </TouchableOpacity>
               </View>
-              <Text style={styles.caption}>Dica: digite ao menos 2 caracteres.</Text>
-            </View>
 
-            <View style={styles.clientList}>
-              {clients.map((client) => (
-                <TouchableOpacity
-                  key={client.id}
-                  style={[
-                    styles.clientItem,
-                    selectedClientId === client.id && styles.clientItemSelected
-                  ]}
-                  onPress={() => {
-                    setSelectedClientId(client.id);
-                    setVisitModalVisible(true);
-                  }}
-                >
-                  <View style={styles.clientRowTop}>
-                    <Text style={styles.clientName}>{client.name}</Text>
-                    <View style={styles.ctaBadge}>
-                      <Text style={styles.ctaBadgeText}>Registrar</Text>
+              <View style={[styles.clientList, isTablet && styles.visitListTablet]}>
+                {clients.map((client) => (
+                  <TouchableOpacity
+                    key={client.id}
+                    style={[
+                      styles.clientItem,
+                      isTablet && styles.clientItemTablet,
+                      selectedClientId === client.id && styles.clientItemSelected
+                    ]}
+                    onPress={() => {
+                      setSelectedClientId(client.id);
+                      setVisitModalVisible(true);
+                    }}
+                  >
+                    <View style={styles.clientRowTop}>
+                      <Text style={[styles.clientName, isTablet && styles.clientNameTablet]}>{client.name}</Text>
+                      <View style={styles.ctaBadge}>
+                        <Text style={styles.ctaBadgeText}>Registrar</Text>
+                      </View>
                     </View>
-                  </View>
-                  <Text style={styles.clientMeta}>{client.phone || client.email || client.id}</Text>
-                </TouchableOpacity>
-              ))}
-              {!clients.length && !loadingClients ? (
-                <Text style={styles.caption}>Nenhum contato em tela. Use a busca.</Text>
-              ) : null}
+                    <Text style={[styles.clientMeta, isTablet && styles.clientMetaTablet]}>
+                      {client.phone || client.email || client.id}
+                    </Text>
+                    {client.isPending ? <Text style={styles.pendingTag}>Pendente de envio ao GHL</Text> : null}
+                  </TouchableOpacity>
+                ))}
+                {!clients.length && !loadingClients ? (
+                  <Text style={styles.caption}>Nenhum contato em tela. Use a busca.</Text>
+                ) : null}
+              </View>
             </View>
-
-            <TouchableOpacity
-              style={[styles.button, styles.secondaryButton, syncing && styles.buttonDisabled]}
-              onPress={() => {
-                runSync().catch(() => undefined);
-              }}
-              disabled={syncing}
-            >
-              {syncing ? (
-                <ActivityIndicator color="#111" />
-              ) : (
-                <Text style={styles.secondaryText}>Sincronizar agora</Text>
-              )}
-            </TouchableOpacity>
 
             <Modal
               visible={visitModalVisible}
@@ -844,22 +965,22 @@ export default function App() {
               animationType="slide"
               onRequestClose={() => setVisitModalVisible(false)}
             >
-              <View style={styles.modalBackdrop}>
+              <View style={[styles.modalBackdrop, isTablet && styles.modalBackdropTablet]}>
                 <KeyboardAvoidingView
                   behavior={Platform.OS === "ios" ? "padding" : undefined}
                   style={styles.modalKeyboard}
                 >
-                  <View style={styles.modalCard}>
-                    <Text style={styles.sectionTitle}>Registrar visita</Text>
-                    <Text style={styles.label}>
+                  <View style={[styles.modalCard, isTablet && styles.modalCardTablet]}>
+                    <Text style={[styles.sectionTitle, isTablet && styles.sectionTitleTablet]}>Registrar visita</Text>
+                    <Text style={[styles.label, isTablet && styles.labelTablet]}>
                       Contato: {selectedClient ? selectedClient.name : "Nenhum selecionado"}
                     </Text>
-                    <Text style={styles.clientMeta}>
+                    <Text style={[styles.clientMeta, isTablet && styles.clientMetaTablet]}>
                       {selectedClient?.phone || selectedClient?.email || selectedClient?.id || ""}
                     </Text>
 
                     <TextInput
-                      style={[styles.input, styles.textArea]}
+                      style={[styles.input, styles.textArea, isTablet && styles.inputTablet]}
                       value={visitNotes}
                       onChangeText={setVisitNotes}
                       placeholder="Observacoes da visita"
@@ -868,7 +989,7 @@ export default function App() {
                     />
 
                     <TouchableOpacity
-                      style={[styles.button, !canSubmit && styles.buttonDisabled]}
+                      style={[styles.button, isTablet && styles.buttonTablet, !canSubmit && styles.buttonDisabled]}
                       onPress={handleRegisterVisit}
                       disabled={!canSubmit}
                     >
@@ -879,8 +1000,64 @@ export default function App() {
                       )}
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[styles.button, styles.secondaryButton]}
+                      style={[styles.button, styles.secondaryButton, isTablet && styles.buttonTablet]}
                       onPress={() => setVisitModalVisible(false)}
+                    >
+                      <Text style={styles.secondaryText}>Cancelar</Text>
+                    </TouchableOpacity>
+                  </View>
+                </KeyboardAvoidingView>
+              </View>
+            </Modal>
+
+            <Modal
+              visible={createClientModalVisible}
+              transparent
+              animationType="slide"
+              onRequestClose={() => setCreateClientModalVisible(false)}
+            >
+              <View style={[styles.modalBackdrop, isTablet && styles.modalBackdropTablet]}>
+                <KeyboardAvoidingView
+                  behavior={Platform.OS === "ios" ? "padding" : undefined}
+                  style={styles.modalKeyboard}
+                >
+                  <View style={[styles.modalCard, isTablet && styles.modalCardTablet]}>
+                    <Text style={[styles.sectionTitle, isTablet && styles.sectionTitleTablet]}>Novo cliente</Text>
+                    <TextInput
+                      style={[styles.input, isTablet && styles.inputTablet]}
+                      value={newClientName}
+                      onChangeText={setNewClientName}
+                      placeholder="Nome do cliente"
+                    />
+                    <TextInput
+                      style={[styles.input, isTablet && styles.inputTablet]}
+                      value={newClientPhone}
+                      onChangeText={setNewClientPhone}
+                      placeholder="Telefone (opcional)"
+                      keyboardType="phone-pad"
+                    />
+                    <TextInput
+                      style={[styles.input, isTablet && styles.inputTablet]}
+                      value={newClientEmail}
+                      onChangeText={setNewClientEmail}
+                      placeholder="Email (opcional)"
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                    <TouchableOpacity
+                      style={[styles.button, isTablet && styles.buttonTablet, creatingClient && styles.buttonDisabled]}
+                      onPress={handleCreateClient}
+                      disabled={creatingClient}
+                    >
+                      {creatingClient ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <Text style={styles.buttonText}>Salvar cliente</Text>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.button, styles.secondaryButton, isTablet && styles.buttonTablet]}
+                      onPress={() => setCreateClientModalVisible(false)}
                     >
                       <Text style={styles.secondaryText}>Cancelar</Text>
                     </TouchableOpacity>
@@ -892,17 +1069,23 @@ export default function App() {
         )}
 
         {activeTab === "HISTORICO" && (
-          <View style={styles.form}>
-            <View style={styles.panel}>
-              <Text style={styles.sectionTitle}>Filtro de periodo</Text>
+          <View style={[styles.form, isTablet && styles.formTablet]}>
+            <View style={[styles.panel, isTablet && styles.panelTablet]}>
+              <Text style={[styles.sectionTitle, isTablet && styles.sectionTitleTablet]}>Filtro de periodo</Text>
               <View style={styles.filterRow}>
                 {(["TODAY", "7D", "15D", "30D", "CUSTOM"] as HistoryPreset[]).map((preset) => (
                   <TouchableOpacity
                     key={preset}
-                    style={[styles.filterChip, historyPreset === preset && styles.filterChipActive]}
+                    style={[styles.filterChip, isTablet && styles.filterChipTablet, historyPreset === preset && styles.filterChipActive]}
                     onPress={() => setHistoryPreset(preset)}
                   >
-                    <Text style={[styles.filterChipText, historyPreset === preset && styles.filterChipTextActive]}>
+                    <Text
+                      style={[
+                        styles.filterChipText,
+                        isTablet && styles.filterChipTextTablet,
+                        historyPreset === preset && styles.filterChipTextActive
+                      ]}
+                    >
                       {preset === "TODAY" ? "Hoje" : preset === "CUSTOM" ? "Custom" : preset}
                     </Text>
                   </TouchableOpacity>
@@ -910,10 +1093,16 @@ export default function App() {
               </View>
               {historyPreset === "CUSTOM" ? (
                 <View style={styles.filterCustomRow}>
-                  <TouchableOpacity style={[styles.input, styles.filterInput]} onPress={() => setShowFromPicker(true)}>
+                  <TouchableOpacity
+                    style={[styles.input, styles.filterInput, isTablet && styles.inputTablet]}
+                    onPress={() => setShowFromPicker(true)}
+                  >
                     <Text style={styles.dateButtonLabel}>De: {toIsoDateInput(customFromDate)}</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.input, styles.filterInput]} onPress={() => setShowToPicker(true)}>
+                  <TouchableOpacity
+                    style={[styles.input, styles.filterInput, isTablet && styles.inputTablet]}
+                    onPress={() => setShowToPicker(true)}
+                  >
                     <Text style={styles.dateButtonLabel}>Ate: {toIsoDateInput(customToDate)}</Text>
                   </TouchableOpacity>
                 </View>
@@ -940,46 +1129,62 @@ export default function App() {
 
             <View style={styles.filterRow}>
               <TouchableOpacity
-                style={[styles.filterChip, historySource === "LOCAL" && styles.filterChipActive]}
+                style={[styles.filterChip, isTablet && styles.filterChipTablet, historySource === "LOCAL" && styles.filterChipActive]}
                 onPress={() => setHistorySource("LOCAL")}
               >
-                <Text style={[styles.filterChipText, historySource === "LOCAL" && styles.filterChipTextActive]}>
+                <Text
+                  style={[
+                    styles.filterChipText,
+                    isTablet && styles.filterChipTextTablet,
+                    historySource === "LOCAL" && styles.filterChipTextActive
+                  ]}
+                >
                   No aparelho
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.filterChip, historySource === "SERVER" && styles.filterChipActive]}
+                style={[styles.filterChip, isTablet && styles.filterChipTablet, historySource === "SERVER" && styles.filterChipActive]}
                 onPress={() => setHistorySource("SERVER")}
               >
-                <Text style={[styles.filterChipText, historySource === "SERVER" && styles.filterChipTextActive]}>
+                <Text
+                  style={[
+                    styles.filterChipText,
+                    isTablet && styles.filterChipTextTablet,
+                    historySource === "SERVER" && styles.filterChipTextActive
+                  ]}
+                >
                   No servidor
                 </Text>
               </TouchableOpacity>
             </View>
 
-            {displayedHistory.map((visit) => (
-              <TouchableOpacity
-                key={`${historySource}-${visit.localVisitId}`}
-                style={styles.historyItem}
-                onPress={() => setHistoryDetail(visit)}
-              >
-                <View style={styles.clientRowTop}>
-                  <Text style={styles.historyMain}>{getVisitDisplayName(visit)}</Text>
-                  <Text style={[styles.historyStatus, { color: statusColor(visit.syncStatus) }]}>
-                    {statusLabel(visit.syncStatus)}
+            <View style={[styles.historyList, isTablet && styles.historyListTablet]}>
+              {displayedHistory.map((visit) => (
+                <TouchableOpacity
+                  key={`${historySource}-${visit.localVisitId}`}
+                  style={[styles.historyItem, isTablet && styles.historyItemTablet]}
+                  onPress={() => setHistoryDetail(visit)}
+                >
+                  <View style={styles.clientRowTop}>
+                    <Text style={[styles.historyMain, isTablet && styles.historyMainTablet]}>{getVisitDisplayName(visit)}</Text>
+                    <Text style={[styles.historyStatus, isTablet && styles.historyStatusTablet, { color: statusColor(visit.syncStatus) }]}>
+                      {statusLabel(visit.syncStatus)}
+                    </Text>
+                  </View>
+                  <Text style={[styles.historySub, isTablet && styles.historySubTablet]}>
+                    {new Date(visit.checkInAt).toLocaleString()}
                   </Text>
-                </View>
-                <Text style={styles.historySub}>{new Date(visit.checkInAt).toLocaleString()}</Text>
-                <Text style={styles.historySub} numberOfLines={2}>
-                  {visit.notes}
-                </Text>
-                {visit.syncStatus === "FAILED" ? (
-                  <Text style={styles.errorMessage} numberOfLines={2}>
-                    {visit.lastError || "Erro desconhecido"}
+                  <Text style={[styles.historySub, isTablet && styles.historySubTablet]} numberOfLines={2}>
+                    {visit.notes}
                   </Text>
-                ) : null}
-              </TouchableOpacity>
-            ))}
+                  {visit.syncStatus === "FAILED" ? (
+                    <Text style={styles.errorMessage} numberOfLines={2}>
+                      {visit.lastError || "Erro desconhecido"}
+                    </Text>
+                  ) : null}
+                </TouchableOpacity>
+              ))}
+            </View>
             {!displayedHistory.length ? (
               <Text style={styles.caption}>
                 {historySource === "LOCAL"
@@ -992,11 +1197,16 @@ export default function App() {
         )}
 
         {activeTab === "MAPA" && (
-          <View style={styles.form}>
-            <Text style={styles.label}>Pontos de visitas realizadas no periodo filtrado</Text>
-            {mapMarkers.length ? (
+          <View style={[styles.form, isTablet && styles.formTablet]}>
+            <Text style={[styles.label, isTablet && styles.labelTablet]}>Pontos de visitas realizadas no periodo filtrado</Text>
+            {!canRenderMap ? (
+              <View style={styles.mapFallback}>
+                <Text style={styles.caption}>Mapa indisponivel neste build.</Text>
+                <Text style={styles.caption}>Defina `GOOGLE_MAPS_API_KEY` antes de gerar o APK/AAB.</Text>
+              </View>
+            ) : mapMarkers.length ? (
               <MapView
-                style={styles.map}
+                style={[styles.map, isTablet && styles.mapTablet]}
                 liteMode={Platform.OS === "android"}
                 initialRegion={{
                   latitude: mapMarkers[0].coordinate.latitude,
@@ -1006,19 +1216,19 @@ export default function App() {
                 }}
               >
                 {mapMarkers.map(({ visit, coordinate }) => (
-                    <Marker
-                      key={visit.localVisitId}
-                      coordinate={coordinate}
-                      title={getVisitDisplayName(visit)}
-                      description={new Date(visit.checkInAt).toLocaleString()}
-                    />
+                  <Marker
+                    key={visit.localVisitId}
+                    coordinate={coordinate}
+                    title={getVisitDisplayName(visit)}
+                    description={new Date(visit.checkInAt).toLocaleString()}
+                  />
                 ))}
               </MapView>
             ) : (
               <Text style={styles.caption}>Nenhuma coordenada registrada ainda.</Text>
             )}
             <Text style={styles.caption}>
-              Offline: a captura GPS continua funcionando sem rede. O mapa depende dos tiles disponiveis no aparelho.
+              Offline: a captura GPS continua funcionando sem rede. O mapa usa cache local quando disponivel.
             </Text>
             {mapMarkers.length >= MAX_MAP_MARKERS ? (
               <Text style={styles.caption}>Mostrando os 300 pontos mais recentes para manter estabilidade.</Text>
@@ -1027,9 +1237,9 @@ export default function App() {
         )}
 
         {activeTab === "GERENCIA" && isMaster && (
-          <View style={styles.form}>
-            <View style={styles.panel}>
-              <Text style={styles.sectionTitle}>Gestao de visitas</Text>
+          <View style={[styles.form, isTablet && styles.formTablet]}>
+            <View style={[styles.panel, isTablet && styles.panelTablet]}>
+              <Text style={[styles.sectionTitle, isTablet && styles.sectionTitleTablet]}>Gestao de visitas</Text>
               <Text style={styles.caption}>Visao consolidada do time de vendas.</Text>
               <View style={styles.filterSection}>
                 <Text style={styles.filterLabel}>Filtro de periodo</Text>
@@ -1037,10 +1247,16 @@ export default function App() {
                   {(["TODAY", "7D", "15D", "30D", "CUSTOM"] as HistoryPreset[]).map((preset) => (
                     <TouchableOpacity
                       key={`manager-${preset}`}
-                      style={[styles.filterChip, historyPreset === preset && styles.filterChipActive]}
+                      style={[styles.filterChip, isTablet && styles.filterChipTablet, historyPreset === preset && styles.filterChipActive]}
                       onPress={() => setHistoryPreset(preset)}
                     >
-                      <Text style={[styles.filterChipText, historyPreset === preset && styles.filterChipTextActive]}>
+                      <Text
+                        style={[
+                          styles.filterChipText,
+                          isTablet && styles.filterChipTextTablet,
+                          historyPreset === preset && styles.filterChipTextActive
+                        ]}
+                      >
                         {preset === "TODAY" ? "Hoje" : preset === "CUSTOM" ? "Custom" : preset}
                       </Text>
                     </TouchableOpacity>
@@ -1048,10 +1264,16 @@ export default function App() {
                 </View>
                 {historyPreset === "CUSTOM" ? (
                   <View style={styles.filterCustomRow}>
-                    <TouchableOpacity style={[styles.input, styles.filterInput]} onPress={() => setShowFromPicker(true)}>
+                    <TouchableOpacity
+                      style={[styles.input, styles.filterInput, isTablet && styles.inputTablet]}
+                      onPress={() => setShowFromPicker(true)}
+                    >
                       <Text style={styles.dateButtonLabel}>De: {toIsoDateInput(customFromDate)}</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[styles.input, styles.filterInput]} onPress={() => setShowToPicker(true)}>
+                    <TouchableOpacity
+                      style={[styles.input, styles.filterInput, isTablet && styles.inputTablet]}
+                      onPress={() => setShowToPicker(true)}
+                    >
                       <Text style={styles.dateButtonLabel}>Ate: {toIsoDateInput(customToDate)}</Text>
                     </TouchableOpacity>
                   </View>
@@ -1080,22 +1302,33 @@ export default function App() {
                 <Text style={styles.filterLabel}>Filtro de vendedor</Text>
                 <View style={styles.filterRow}>
                   <TouchableOpacity
-                    style={[styles.filterChip, managerSellerId === "" && styles.filterChipActive]}
+                    style={[styles.filterChip, isTablet && styles.filterChipTablet, managerSellerId === "" && styles.filterChipActive]}
                     onPress={() => setManagerSellerId("")}
                   >
-                    <Text style={[styles.filterChipText, managerSellerId === "" && styles.filterChipTextActive]}>
+                    <Text
+                      style={[
+                        styles.filterChipText,
+                        isTablet && styles.filterChipTextTablet,
+                        managerSellerId === "" && styles.filterChipTextActive
+                      ]}
+                    >
                       Todos
                     </Text>
                   </TouchableOpacity>
                   {managerSellers.map((seller) => (
                     <TouchableOpacity
                       key={seller.id}
-                      style={[styles.filterChip, managerSellerId === seller.id && styles.filterChipActive]}
+                      style={[
+                        styles.filterChip,
+                        isTablet && styles.filterChipTablet,
+                        managerSellerId === seller.id && styles.filterChipActive
+                      ]}
                       onPress={() => setManagerSellerId(seller.id)}
                     >
                       <Text
                         style={[
                           styles.filterChipText,
+                          isTablet && styles.filterChipTextTablet,
                           managerSellerId === seller.id && styles.filterChipTextActive
                         ]}
                       >
@@ -1118,25 +1351,29 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {filteredManagerHistory.map((visit) => (
-              <TouchableOpacity
-                key={`manager-${visit.localVisitId}`}
-                style={styles.historyItem}
-                onPress={() => setHistoryDetail(visit)}
-              >
-                <View style={styles.clientRowTop}>
-                  <Text style={styles.historyMain}>{visit.seller?.name || visit.sellerId}</Text>
-                  <Text style={[styles.historyStatus, { color: statusColor(visit.syncStatus) }]}>
-                    {statusLabel(visit.syncStatus)}
+            <View style={[styles.historyList, isTablet && styles.historyListTablet]}>
+              {filteredManagerHistory.map((visit) => (
+                <TouchableOpacity
+                  key={`manager-${visit.localVisitId}`}
+                  style={[styles.historyItem, isTablet && styles.historyItemTablet]}
+                  onPress={() => setHistoryDetail(visit)}
+                >
+                  <View style={styles.clientRowTop}>
+                    <Text style={[styles.historyMain, isTablet && styles.historyMainTablet]}>
+                      {visit.seller?.name || visit.sellerId}
+                    </Text>
+                    <Text style={[styles.historyStatus, isTablet && styles.historyStatusTablet, { color: statusColor(visit.syncStatus) }]}>
+                      {statusLabel(visit.syncStatus)}
+                    </Text>
+                  </View>
+                  <Text style={[styles.historySub, isTablet && styles.historySubTablet]}>{getVisitDisplayName(visit)}</Text>
+                  <Text style={[styles.historySub, isTablet && styles.historySubTablet]}>{new Date(visit.checkInAt).toLocaleString()}</Text>
+                  <Text style={[styles.historySub, isTablet && styles.historySubTablet]} numberOfLines={1}>
+                    {visit.notes}
                   </Text>
-                </View>
-                <Text style={styles.historySub}>{getVisitDisplayName(visit)}</Text>
-                <Text style={styles.historySub}>{new Date(visit.checkInAt).toLocaleString()}</Text>
-                <Text style={styles.historySub} numberOfLines={1}>
-                  {visit.notes}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                </TouchableOpacity>
+              ))}
+            </View>
             {!filteredManagerHistory.length ? (
               <Text style={styles.caption}>Sem visitas para os filtros selecionados.</Text>
             ) : null}
@@ -1144,51 +1381,59 @@ export default function App() {
         )}
 
         {activeTab === "CONFIG" && (
-          <View style={styles.form}>
-            <TextInput
-              style={styles.input}
-              value={apiBaseUrl}
-              onChangeText={setApiBaseUrl}
-              placeholder="API Base URL"
-              autoCapitalize="none"
-            />
-            <TouchableOpacity style={styles.button} onPress={handleSaveConfig}>
-              <Text style={styles.buttonText}>Salvar configuracao</Text>
-            </TouchableOpacity>
-            <TextInput
-              style={styles.input}
-              value={ghlUserIdInput}
-              onChangeText={setGhlUserIdInput}
-              placeholder="ID do usuario no GHL (opcional)"
-              autoCapitalize="none"
-            />
-            <TouchableOpacity style={[styles.button, styles.secondaryButton]} onPress={handleSaveGhlUserId}>
-              <Text style={styles.secondaryText}>Salvar vinculo do usuario</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.button, styles.secondaryButton]}
-              onPress={() => refreshClients(contactQuery.trim() || undefined)}
-            >
-              <Text style={styles.secondaryText}>Atualizar clientes</Text>
-            </TouchableOpacity>
+          <View style={[styles.form, isTablet && styles.formTablet]}>
+            <View style={[styles.configGrid, isTablet && styles.configGridTablet]}>
+              <View style={[styles.panel, isTablet && styles.panelTablet, isTablet && styles.configPanelTablet]}>
+                <Text style={[styles.sectionTitle, isTablet && styles.sectionTitleTablet]}>Conexao da API</Text>
+                <TextInput
+                  style={[styles.input, isTablet && styles.inputTablet]}
+                  value={apiBaseUrl}
+                  onChangeText={setApiBaseUrl}
+                  placeholder="URL da API"
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity style={[styles.button, styles.configPrimaryButton, isTablet && styles.buttonTablet]} onPress={handleSaveConfig}>
+                  <Text style={styles.buttonText}>Salvar endpoint</Text>
+                </TouchableOpacity>
+              </View>
 
-            <TouchableOpacity
-              style={[styles.button, syncingGhl && styles.buttonDisabled]}
-              onPress={() => handleSyncGhl(false)}
-              disabled={syncingGhl}
-            >
-              <Text style={styles.buttonText}>Sincronizar contatos</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.button, styles.secondaryButton, syncingGhl && styles.buttonDisabled]}
-              onPress={() => handleSyncGhl(true)}
-              disabled={syncingGhl}
-            >
-              <Text style={styles.secondaryText}>Sincronizacao completa</Text>
-            </TouchableOpacity>
+              <View style={[styles.panel, isTablet && styles.panelTablet, isTablet && styles.configPanelTablet]}>
+                <Text style={[styles.sectionTitle, isTablet && styles.sectionTitleTablet]}>Integracao GHL</Text>
+                <TextInput
+                  style={[styles.input, isTablet && styles.inputTablet]}
+                  value={ghlUserIdInput}
+                  onChangeText={setGhlUserIdInput}
+                  placeholder="ID do vendedor no GHL (opcional)"
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity style={[styles.button, styles.configSoftButton, isTablet && styles.buttonTablet]} onPress={handleSaveGhlUserId}>
+                  <Text style={styles.secondaryText}>Salvar vinculo do vendedor</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.button, styles.configSoftButton, isTablet && styles.buttonTablet]}
+                  onPress={() => refreshClients(contactQuery.trim() || undefined)}
+                >
+                  <Text style={styles.secondaryText}>Atualizar contatos locais</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.button, styles.configPrimaryButton, syncingGhl && styles.buttonDisabled, isTablet && styles.buttonTablet]}
+                  onPress={() => handleSyncGhl(false)}
+                  disabled={syncingGhl}
+                >
+                  <Text style={styles.buttonText}>Sincronizar contatos</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.button, styles.configSoftButton, syncingGhl && styles.buttonDisabled, isTablet && styles.buttonTablet]}
+                  onPress={() => handleSyncGhl(true)}
+                  disabled={syncingGhl}
+                >
+                  <Text style={styles.secondaryText}>Sincronizacao completa</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
 
-            <TouchableOpacity style={[styles.button, styles.dangerButton]} onPress={handleLogout}>
-              <Text style={styles.buttonText}>Sair</Text>
+            <TouchableOpacity style={[styles.button, styles.configDangerButton, isTablet && styles.buttonTablet]} onPress={handleLogout}>
+              <Text style={styles.buttonText}>Encerrar sessao</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -1200,24 +1445,32 @@ export default function App() {
           hardwareAccelerated
           onRequestClose={() => setHistoryDetail(null)}
         >
-          <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
-              <Text style={styles.sectionTitle}>
+          <View style={[styles.modalBackdrop, isTablet && styles.modalBackdropTablet]}>
+            <View style={[styles.modalCard, isTablet && styles.modalCardTablet]}>
+              <Text style={[styles.sectionTitle, isTablet && styles.sectionTitleTablet]}>
                 {historyDetail ? getVisitDisplayName(historyDetail) : ""}
               </Text>
-              <Text style={styles.historySub}>
+              <Text style={[styles.historySub, isTablet && styles.historySubTablet]}>
                 {historyDetail ? new Date(historyDetail.checkInAt).toLocaleString() : ""}
               </Text>
-              <Text style={[styles.historyStatus, { color: statusColor(historyDetail?.syncStatus || "PENDING") }]}>
+              <Text
+                style={[
+                  styles.historyStatus,
+                  isTablet && styles.historyStatusTablet,
+                  { color: statusColor(historyDetail?.syncStatus || "PENDING") }
+                ]}
+              >
                 Status: {historyDetail ? statusLabel(historyDetail.syncStatus) : ""}
               </Text>
               {historyDetail?.seller ? (
-                <Text style={styles.historySub}>Vendedor: {historyDetail.seller.name}</Text>
+                <Text style={[styles.historySub, isTablet && styles.historySubTablet]}>
+                  Vendedor: {historyDetail.seller.name}
+                </Text>
               ) : null}
-              <Text style={styles.historySub}>{historyDetail?.notes}</Text>
-              {historyDetail && historyDetailCoordinate ? (
+              <Text style={[styles.historySub, isTablet && styles.historySubTablet]}>{historyDetail?.notes}</Text>
+              {historyDetail && historyDetailCoordinate && canRenderMap ? (
                 <MapView
-                  style={styles.detailMap}
+                  style={[styles.detailMap, isTablet && styles.detailMapTablet]}
                   liteMode={Platform.OS === "android"}
                   initialRegion={{
                     latitude: historyDetailCoordinate.latitude,
@@ -1231,13 +1484,15 @@ export default function App() {
                     title={getVisitDisplayName(historyDetail)}
                   />
                 </MapView>
+              ) : historyDetail && historyDetailCoordinate ? (
+                <Text style={styles.caption}>Mapa indisponivel neste build. Configure `GOOGLE_MAPS_API_KEY`.</Text>
               ) : historyDetail ? (
                 <Text style={styles.caption}>Coordenada invalida para exibir no mapa.</Text>
               ) : null}
 
               {activeTab === "HISTORICO" && historySource === "LOCAL" && historyDetail?.syncStatus === "FAILED" ? (
                 <TouchableOpacity
-                  style={[styles.button, styles.retryButton]}
+                  style={[styles.button, styles.retryButton, isTablet && styles.buttonTablet]}
                   onPress={async () => {
                     await handleRetryVisit(historyDetail.localVisitId);
                     setHistoryDetail(null);
@@ -1247,7 +1502,7 @@ export default function App() {
                 </TouchableOpacity>
               ) : null}
               <TouchableOpacity
-                style={[styles.button, styles.secondaryButton]}
+                style={[styles.button, styles.secondaryButton, isTablet && styles.buttonTablet]}
                 onPress={() => setHistoryDetail(null)}
               >
                 <Text style={styles.secondaryText}>Fechar</Text>
@@ -1287,8 +1542,19 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     color: "#f8fafc"
   },
+  brandPill: {
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.22)",
+    color: "#ecfeff",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.8
+  },
   title: {
-    fontSize: 34,
+    fontSize: 30,
     fontWeight: "800",
     color: "#fff",
     textAlign: "center"
@@ -1354,6 +1620,9 @@ const styles = StyleSheet.create({
   searchButton: {
     width: 96
   },
+  newClientButton: {
+    marginTop: 10
+  },
   managerRefreshButton: {
     marginTop: 8
   },
@@ -1415,6 +1684,19 @@ const styles = StyleSheet.create({
   dangerButton: {
     backgroundColor: "#b91c1c"
   },
+  configPrimaryButton: {
+    marginTop: 8,
+    backgroundColor: "#14532d"
+  },
+  configSoftButton: {
+    marginTop: 8,
+    backgroundColor: "#f0f6ff",
+    borderWidth: 1,
+    borderColor: "#d7e7ff"
+  },
+  configDangerButton: {
+    backgroundColor: "#9f1239"
+  },
   buttonDisabled: {
     opacity: 0.6
   },
@@ -1474,6 +1756,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: 12,
     color: "#64748b"
+  },
+  pendingTag: {
+    marginTop: 4,
+    fontSize: 11,
+    color: "#9a3412",
+    fontWeight: "700"
   },
   sectionTitle: {
     marginTop: 6,
@@ -1571,6 +1859,16 @@ const styles = StyleSheet.create({
     height: 320,
     borderRadius: 12
   },
+  mapFallback: {
+    width: "100%",
+    minHeight: 120,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#dbe3ee",
+    backgroundColor: "#ffffff",
+    padding: 12,
+    justifyContent: "center"
+  },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -1590,5 +1888,176 @@ const styles = StyleSheet.create({
     width: "100%",
     height: 220,
     borderRadius: 12
+  },
+  containerTablet: {
+    paddingHorizontal: 28,
+    paddingTop: 8
+  },
+  headerTablet: {
+    marginTop: 12,
+    borderRadius: 24,
+    paddingHorizontal: 36,
+    paddingVertical: 30
+  },
+  logoTablet: {
+    width: 152,
+    height: 42
+  },
+  logoFallbackTablet: {
+    fontSize: 24
+  },
+  brandPillTablet: {
+    fontSize: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 6
+  },
+  titleTablet: {
+    fontSize: 42
+  },
+  subtitleTablet: {
+    fontSize: 20,
+    marginTop: 10
+  },
+  syncTextTablet: {
+    fontSize: 16
+  },
+  metricsRowTablet: {
+    gap: 18
+  },
+  metricChipTablet: {
+    minWidth: 172,
+    paddingHorizontal: 22,
+    paddingVertical: 14
+  },
+  metricLabelTablet: {
+    fontSize: 14
+  },
+  metricValueTablet: {
+    fontSize: 20
+  },
+  formTablet: {
+    gap: 16
+  },
+  panelTablet: {
+    padding: 18,
+    borderRadius: 20
+  },
+  tabsTablet: {
+    justifyContent: "center",
+    gap: 12
+  },
+  tabButtonTablet: {
+    flex: 0,
+    minWidth: 128,
+    height: 48
+  },
+  tabTextTablet: {
+    fontSize: 14,
+    letterSpacing: 0.4
+  },
+  contentWrapTablet: {
+    maxWidth: 1180,
+    paddingBottom: 36
+  },
+  inputTablet: {
+    minHeight: 52,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16
+  },
+  buttonTablet: {
+    height: 52
+  },
+  labelTablet: {
+    fontSize: 16
+  },
+  sectionTitleTablet: {
+    fontSize: 20
+  },
+  visitBody: {
+    gap: 12
+  },
+  visitBodyTablet: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 16
+  },
+  visitPrimaryColumn: {
+    gap: 12
+  },
+  visitPrimaryColumnTablet: {
+    width: 420
+  },
+  visitListTablet: {
+    flex: 1,
+    gap: 12
+  },
+  clientItemTablet: {
+    padding: 14
+  },
+  clientNameTablet: {
+    fontSize: 16
+  },
+  clientMetaTablet: {
+    fontSize: 13
+  },
+  filterChipTablet: {
+    paddingHorizontal: 14,
+    paddingVertical: 8
+  },
+  filterChipTextTablet: {
+    fontSize: 14
+  },
+  historyList: {
+    gap: 8
+  },
+  historyListTablet: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "stretch",
+    gap: 12
+  },
+  historyItemTablet: {
+    width: "48%",
+    minHeight: 120,
+    padding: 14
+  },
+  historyMainTablet: {
+    fontSize: 16
+  },
+  historySubTablet: {
+    fontSize: 13
+  },
+  historyStatusTablet: {
+    fontSize: 13
+  },
+  mapTablet: {
+    height: 460,
+    borderRadius: 16
+  },
+  configGrid: {
+    gap: 12
+  },
+  configGridTablet: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 16
+  },
+  configPanelTablet: {
+    flex: 1
+  },
+  modalBackdropTablet: {
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24
+  },
+  modalCardTablet: {
+    width: "100%",
+    maxWidth: 760,
+    borderRadius: 20,
+    padding: 20
+  },
+  detailMapTablet: {
+    height: 320
   }
 });
