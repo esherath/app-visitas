@@ -12,7 +12,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:seed": "node prisma/seed.mjs"
+    "prisma:seed": "node prisma/seed.mjs",
+    "users:upsert:production": "node scripts/upsert-production-users.mjs",
+    "users:upsert:production:dry": "node scripts/upsert-production-users.mjs --dry-run"
   },
   "dependencies": {
     "@prisma/client": "^6.4.1",
