@@ -314,10 +314,10 @@ export async function POST(request: Request) {
 
     const results: SyncResult[] = [];
 
-    for (const item of payload.visits) {
-      try {
-        const resolvedClient = await resolveClientForVisit(auth.userId, auth.organizationId, {
-          clientId: item.clientId,
+	    for (const item of payload.visits) {
+	      try {
+	        const resolvedClient = await resolveClientForVisit(auth.userId, auth.organizationId, {
+	          clientId: item.clientId,
           clientName: item.clientName,
           clientEmail: item.clientEmail,
           clientPhone: item.clientPhone
@@ -332,20 +332,28 @@ export async function POST(request: Request) {
           throw new Error("localVisitId already exists for another seller");
         }
 
-        let visit = existing;
-        if (visit && visit.clientId !== resolvedClient.id) {
-          visit = await prisma.visit.update({
-            where: { id: visit.id },
-            data: {
-              clientId: resolvedClient.id
-            },
-            include: { client: true }
-          });
-        }
+	        let visit = existing;
+	        if (visit && visit.clientId !== resolvedClient.id) {
+	          visit = await prisma.visit.update({
+	            where: { id: visit.id },
+	            data: {
+	              clientId: resolvedClient.id
+	            },
+	            include: { client: true }
+	          });
+	        }
 
-        if (!visit) {
-          visit = await prisma.visit.create({
-            data: {
+	        if (visit?.status === "SYNCED" && visit.ghlNoteId) {
+	          results.push({
+	            localVisitId: item.localVisitId,
+	            success: true
+	          });
+	          continue;
+	        }
+
+	        if (!visit) {
+	          visit = await prisma.visit.create({
+	            data: {
               localVisitId: item.localVisitId,
               sellerId: auth.userId,
               clientId: resolvedClient.id,
@@ -356,9 +364,23 @@ export async function POST(request: Request) {
               accuracyMeters: item.accuracyMeters,
               status: "PENDING"
             },
-            include: { client: true }
-          });
-        }
+	            include: { client: true }
+	          });
+	        } else {
+	          visit = await prisma.visit.update({
+	            where: { id: visit.id },
+	            data: {
+	              notes: item.notes,
+	              checkInAt: new Date(item.checkInAt),
+	              latitude: item.latitude,
+	              longitude: item.longitude,
+	              accuracyMeters: item.accuracyMeters,
+	              status: "PENDING",
+	              lastSyncError: null
+	            },
+	            include: { client: true }
+	          });
+	        }
 
         if (!visit.client.ghlContactId) {
           await prisma.visit.update({
@@ -389,11 +411,12 @@ export async function POST(request: Request) {
           properties[objectConfig.titleField] = `Visita ${visit.client.name}`;
         }
 
-        const ghlVisitRecord = await createGhlCustomObjectRecord({
-          objectKey: objectConfig.objectKey,
-          properties,
-          organizationId: auth.organizationId
-        });
+	        const ghlVisitRecord = await createGhlCustomObjectRecord({
+	          objectKey: objectConfig.objectKey,
+	          key: `${auth.organizationId}:${auth.userId}:${item.localVisitId}`,
+	          properties,
+	          organizationId: auth.organizationId
+	        });
 
         await prisma.visit.update({
           where: { id: visit.id },
