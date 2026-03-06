@@ -1,6 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 
 const TOKEN_KEY = "auth_token";
+const USER_KEY = "auth_user";
 
 function withBase(baseUrl: string, path: string) {
   return `${baseUrl.replace(/\/+$/, "")}${path}`;
@@ -33,8 +34,27 @@ export async function getAuthToken() {
   return SecureStore.getItemAsync(TOKEN_KEY);
 }
 
+export async function saveAuthUser(user: AuthUser) {
+  await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user));
+}
+
+export async function getAuthUser() {
+  const raw = await SecureStore.getItemAsync(USER_KEY);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as AuthUser;
+  } catch {
+    await SecureStore.deleteItemAsync(USER_KEY);
+    return null;
+  }
+}
+
 export async function clearAuthToken() {
   await SecureStore.deleteItemAsync(TOKEN_KEY);
+  await SecureStore.deleteItemAsync(USER_KEY);
 }
 
 export async function login(

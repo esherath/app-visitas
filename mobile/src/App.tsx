@@ -58,9 +58,11 @@ import {
 } from "./services/api";
 import {
   clearAuthToken,
+  getAuthUser,
   getAuthToken,
   login,
   me,
+  saveAuthUser,
   saveAuthToken,
   type AuthUser
 } from "./services/auth";
@@ -96,6 +98,28 @@ type OrganizationEditorState = {
 };
 const MAX_MAP_MARKERS = 300;
 const CONTACT_SILENT_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+function isLikelyNetworkError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("network request failed") ||
+    message.includes("failed to fetch") ||
+    message.includes("networkerror") ||
+    message.includes("request timed out")
+  );
+}
+
+function isAuthSessionError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.message.includes("Auth me failed: 401") || error.message.includes("Auth me failed: 403");
+}
 
 function makeLocalVisitId() {
   return `local-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
@@ -620,8 +644,17 @@ export default function App() {
         if (!cached.length && !options?.silent) {
           Alert.alert("Clientes", error instanceof Error ? error.message : "Falha ao carregar clientes");
         }
-      } else if (!options?.silent) {
-        Alert.alert("Busca", error instanceof Error ? error.message : "Falha ao buscar contatos");
+      } else {
+        const cached = await getCachedClients(user.id);
+        const normalizedQuery = query.trim().toLowerCase();
+        const filtered = cached.filter((client) => client.name.toLowerCase().includes(normalizedQuery));
+        setClients(filtered);
+        if (!selectedClientId && filtered[0]) {
+          setSelectedClientId(filtered[0].id);
+        }
+        if (!filtered.length && !options?.silent && !isLikelyNetworkError(error)) {
+          Alert.alert("Busca", error instanceof Error ? error.message : "Falha ao buscar contatos");
+        }
       }
     } finally {
       setLoadingClients(false);
@@ -642,7 +675,7 @@ export default function App() {
   }, [apiBaseUrl, token, user]);
 
   const refreshServerHistory = useCallback(async () => {
-    if (!token) {
+    if (!token || online === false) {
       return;
     }
     try {
@@ -672,14 +705,16 @@ export default function App() {
       );
       setManagerHistory(visits);
     } catch (error) {
-      Alert.alert("Gerencia", error instanceof Error ? error.message : "Falha ao carregar dados");
+      if (!isLikelyNetworkError(error)) {
+        Alert.alert("Gerencia", error instanceof Error ? error.message : "Falha ao carregar dados");
+      }
     } finally {
       setManagerLoading(false);
     }
-  }, [apiBaseUrl, isMaster, isSuperAdmin, token]);
+  }, [apiBaseUrl, isMaster, isSuperAdmin, online, token]);
 
   const refreshOrganizations = useCallback(async () => {
-    if (!token || !canManageOrganizations) {
+    if (!token || !canManageOrganizations || online === false) {
       setOrganizations([]);
       return;
     }
@@ -689,11 +724,13 @@ export default function App() {
       const list = await fetchOrganizations({ apiBaseUrl, token });
       setOrganizations(list);
     } catch (error) {
-      Alert.alert("Empresas", error instanceof Error ? error.message : "Falha ao carregar empresas");
+      if (!isLikelyNetworkError(error)) {
+        Alert.alert("Empresas", error instanceof Error ? error.message : "Falha ao carregar empresas");
+      }
     } finally {
       setOrganizationsLoading(false);
     }
-  }, [apiBaseUrl, canManageOrganizations, token]);
+  }, [apiBaseUrl, canManageOrganizations, online, token]);
 
   const runSync = useCallback(async (options?: { silent?: boolean }) => {
     if (!token) {
@@ -764,9 +801,14 @@ export default function App() {
 
   const bootstrap = useCallback(async () => {
     await initDb();
-    const [savedApiBase, savedToken] = await Promise.all([
+    const netInfo = await NetInfo.fetch();
+    const isConnected = Boolean(netInfo.isConnected);
+    setOnline(isConnected);
+
+    const [savedApiBase, savedToken, savedUser] = await Promise.all([
       getSetting("api_base_url"),
-      getAuthToken()
+      getAuthToken(),
+      getAuthUser()
     ]);
 
     const normalizedApi = savedApiBase?.trim() || API_BASE_URL;
@@ -777,8 +819,19 @@ export default function App() {
         const currentUser = await me(normalizedApi, savedToken);
         setToken(savedToken);
         setUser(currentUser);
-      } catch {
-        await clearAuthToken();
+        await saveAuthUser(currentUser);
+      } catch (error) {
+        if (!isConnected && savedUser) {
+          setToken(savedToken);
+          setUser(savedUser);
+        } else if (isAuthSessionError(error)) {
+          await clearAuthToken();
+        } else if (savedUser) {
+          setToken(savedToken);
+          setUser(savedUser);
+        } else {
+          await clearAuthToken();
+        }
       }
     }
 
@@ -960,6 +1013,12 @@ export default function App() {
       return;
     }
 
+    const netInfo = await NetInfo.fetch();
+    if (!netInfo.isConnected) {
+      Alert.alert("Sem internet", "Conecte-se à internet para fazer login neste aparelho.");
+      return;
+    }
+
     setAuthLoading(true);
     try {
       const authResponse = await login(normalizedApi, {
@@ -972,6 +1031,7 @@ export default function App() {
 
       await setSetting("api_base_url", normalizedApi);
       await saveAuthToken(authResponse.token);
+      await saveAuthUser(authResponse.user);
       setApiBaseUrl(normalizedApi);
       setToken(authResponse.token);
       setUser(authResponse.user);
@@ -981,7 +1041,11 @@ export default function App() {
       }
       Alert.alert("Autenticado", `Bem-vindo, ${authResponse.user.name}.`);
     } catch (error) {
-      Alert.alert("Falha de autenticacao", error instanceof Error ? error.message : "Erro inesperado");
+      if (isLikelyNetworkError(error)) {
+        Alert.alert("Falha de autenticacao", "Sem acesso a rede. Verifique a internet e tente novamente.");
+      } else {
+        Alert.alert("Falha de autenticacao", error instanceof Error ? error.message : "Erro inesperado");
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -3873,5 +3937,4 @@ const styles = StyleSheet.create({
     height: 320
   }
 });
-
 

@@ -38,6 +38,20 @@ function authHeaders(token: string) {
   };
 }
 
+async function readErrorMessage(response: Response, fallback: string) {
+  const text = await response.text();
+  if (!text.trim()) {
+    return fallback;
+  }
+
+  try {
+    const json = JSON.parse(text) as { message?: string; error?: string };
+    return json.message ?? json.error ?? text;
+  } catch {
+    return text;
+  }
+}
+
 export async function syncVisitsToApi(ctx: RequestContext, payload: SyncPayload) {
   const response = await fetch(withBase(ctx.apiBaseUrl, "/api/sync"), {
     method: "POST",
@@ -46,7 +60,8 @@ export async function syncVisitsToApi(ctx: RequestContext, payload: SyncPayload)
   });
 
   if (!response.ok) {
-    throw new Error(`Sync API error ${response.status}`);
+    const message = await readErrorMessage(response, `Sync API error ${response.status}`);
+    throw new Error(message);
   }
 
   return (await response.json()) as { results: SyncApiResult[] };
@@ -97,7 +112,8 @@ export async function syncGhlContacts(
   });
 
   if (!response.ok) {
-    throw new Error(`Vynor App sync failed: ${response.status}`);
+    const message = await readErrorMessage(response, `Vynor App sync failed: ${response.status}`);
+    throw new Error(message);
   }
 
   return (await response.json()) as {
