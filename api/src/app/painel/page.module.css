@@ -1,0 +1,410 @@
+.page {
+  min-height: 100vh;
+  padding: 32px;
+  background:
+    radial-gradient(circle at top left, rgba(0, 128, 96, 0.16), transparent 30%),
+    linear-gradient(180deg, #f5f8fb 0%, #edf3f8 100%);
+  color: #102033;
+}
+
+.shell {
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.heroCard,
+.panel,
+.card,
+.loginCard {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(16, 32, 51, 0.08);
+  border-radius: 28px;
+  box-shadow: 0 24px 80px rgba(16, 32, 51, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.heroCard {
+  padding: 32px;
+}
+
+.loginCard {
+  padding: 28px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(0, 128, 96, 0.1);
+  color: #0b6b54;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 18px 0 10px;
+  font-size: clamp(34px, 5vw, 56px);
+  line-height: 0.96;
+  letter-spacing: -0.04em;
+}
+
+.subtitle {
+  max-width: 58ch;
+  margin: 0;
+  color: #4b6077;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.heroStats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 26px;
+}
+
+.stat {
+  padding: 18px 20px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(8, 136, 187, 0.08), rgba(0, 128, 96, 0.06));
+}
+
+.statLabel {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #557087;
+}
+
+.statValue {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.loginHeader {
+  margin-bottom: 20px;
+}
+
+.loginTitle {
+  margin: 0 0 8px;
+  font-size: 24px;
+}
+
+.loginText,
+.muted {
+  margin: 0;
+  color: #5f7489;
+  line-height: 1.6;
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.fieldGridSingle {
+  display: grid;
+  gap: 14px;
+}
+
+.field,
+.fieldWide {
+  display: grid;
+  gap: 8px;
+}
+
+.fieldWide {
+  grid-column: 1 / -1;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #355067;
+}
+
+.input,
+.textarea,
+.select {
+  width: 100%;
+  border: 1px solid rgba(16, 32, 51, 0.12);
+  background: #f9fbfd;
+  color: #102033;
+  border-radius: 18px;
+  padding: 14px 16px;
+  font: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.textarea {
+  min-height: 108px;
+  resize: vertical;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 13px;
+}
+
+.input:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: rgba(8, 136, 187, 0.5);
+  box-shadow: 0 0 0 4px rgba(8, 136, 187, 0.12);
+  background: #fff;
+}
+
+.pillRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pill,
+.pillActive {
+  border: 0;
+  border-radius: 999px;
+  padding: 11px 16px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.pill {
+  background: #eef4f8;
+  color: #476176;
+}
+
+.pillActive {
+  background: linear-gradient(135deg, #0888bb 0%, #06785d 100%);
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(8, 136, 187, 0.24);
+}
+
+.buttonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.primaryButton,
+.secondaryButton,
+.ghostButton,
+.dangerButton {
+  border: 0;
+  border-radius: 18px;
+  padding: 14px 18px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.primaryButton {
+  color: #fff;
+  background: linear-gradient(135deg, #0888bb 0%, #06785d 100%);
+  box-shadow: 0 18px 36px rgba(8, 136, 187, 0.22);
+}
+
+.secondaryButton {
+  background: #edf3f8;
+  color: #203246;
+}
+
+.ghostButton {
+  background: transparent;
+  color: #203246;
+  border: 1px solid rgba(16, 32, 51, 0.12);
+}
+
+.dangerButton {
+  background: #ffe7e7;
+  color: #8f1c1c;
+}
+
+.appShell {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 22px;
+}
+
+.panel {
+  padding: 22px;
+}
+
+.panelTitle {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+.panelText {
+  margin: 0 0 18px;
+  color: #5f7489;
+  line-height: 1.6;
+}
+
+.orgList {
+  display: grid;
+  gap: 12px;
+}
+
+.orgButton,
+.orgButtonActive {
+  width: 100%;
+  padding: 16px 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(16, 32, 51, 0.08);
+  text-align: left;
+  background: #f8fbfd;
+  cursor: pointer;
+}
+
+.orgButtonActive {
+  background: linear-gradient(135deg, rgba(8, 136, 187, 0.12), rgba(6, 120, 93, 0.12));
+  border-color: rgba(8, 136, 187, 0.24);
+}
+
+.orgName {
+  display: block;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.orgMeta {
+  display: block;
+  margin-top: 6px;
+  color: #607488;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.statusLine,
+.successLine,
+.errorLine {
+  padding: 14px 16px;
+  border-radius: 18px;
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+
+.statusLine {
+  background: #ecf5fb;
+  color: #1b5f82;
+}
+
+.successLine {
+  background: #e7f7f1;
+  color: #0d6c54;
+}
+
+.errorLine {
+  background: #ffebeb;
+  color: #8b1d1d;
+}
+
+.contentStack {
+  display: grid;
+  gap: 20px;
+}
+
+.card {
+  padding: 24px;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 22px;
+}
+
+.cardText {
+  margin: 6px 0 0;
+  color: #5f7489;
+  line-height: 1.6;
+}
+
+.tokenHint {
+  margin-top: 8px;
+  color: #6d7f92;
+  font-size: 13px;
+}
+
+.sectionDivider {
+  height: 1px;
+  background: rgba(16, 32, 51, 0.08);
+  margin: 20px 0;
+}
+
+.sellerRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 14px 0;
+}
+
+.sellerInfo {
+  display: grid;
+  gap: 4px;
+}
+
+.sellerName {
+  font-weight: 800;
+}
+
+.sellerEmail {
+  color: #607488;
+  font-size: 13px;
+}
+
+.emptyState {
+  padding: 22px;
+  border-radius: 22px;
+  background: #f6fafc;
+  color: #5f7489;
+}
+
+@media (max-width: 1080px) {
+  .hero,
+  .appShell {
+    grid-template-columns: 1fr;
+  }
+
+  .heroStats {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .page {
+    padding: 18px;
+  }
+
+  .fieldGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sellerRow {
+    grid-template-columns: 1fr;
+  }
+}

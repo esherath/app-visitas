@@ -62,11 +62,12 @@ function mapOrganizationResponse(organization: {
 
 export async function GET(request: Request) {
   const auth = requireAuth(request);
-  if (!hasAnyRole(auth, ["MASTER", "SUPER_ADMIN"])) {
+  if (!auth || !hasAnyRole(auth, ["MASTER", "SUPER_ADMIN"])) {
     return unauthorized("Only master/super admin can access organizations");
   }
 
   const organizations = await prisma.organization.findMany({
+    where: auth?.role === "SUPER_ADMIN" ? undefined : { id: auth.organizationId },
     orderBy: { createdAt: "asc" },
     include: {
       _count: {
@@ -84,8 +85,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const auth = requireAuth(request);
-  if (!hasAnyRole(auth, ["MASTER", "SUPER_ADMIN"])) {
-    return unauthorized("Only master/super admin can create organizations");
+  if (!auth || !hasAnyRole(auth, ["SUPER_ADMIN"])) {
+    return unauthorized("Only super admin can create organizations");
   }
 
   try {
@@ -191,7 +192,7 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   const auth = requireAuth(request);
-  if (!hasAnyRole(auth, ["MASTER", "SUPER_ADMIN"])) {
+  if (!auth || !hasAnyRole(auth, ["MASTER", "SUPER_ADMIN"])) {
     return unauthorized("Only master/super admin can update organizations");
   }
 
@@ -225,8 +226,14 @@ export async function PATCH(request: Request) {
     if (!existing) {
       return NextResponse.json({ ok: false, message: "Organization not found" }, { status: 404 });
     }
+    if (auth.role !== "SUPER_ADMIN" && existing.id !== auth.organizationId) {
+      return unauthorized("Organization belongs to another account");
+    }
 
     const nextSlug = body.slug?.trim().toLowerCase();
+    if (auth.role !== "SUPER_ADMIN" && nextSlug && nextSlug !== existing.slug) {
+      return unauthorized("Only super admin can change organization slug");
+    }
     if (nextSlug && nextSlug !== existing.slug) {
       const slugInUse = await prisma.organization.findUnique({
         where: { slug: nextSlug },
