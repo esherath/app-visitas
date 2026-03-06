@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { getGhlConfig, getGhlHeaders } from "@/lib/ghl";
+import { getGhlConfig } from "@/lib/ghl";
 import type { Prisma } from "@prisma/client";
 
 type RawContact = {
@@ -59,25 +59,34 @@ function toJsonValue(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
 
-async function ghlGet(path: string) {
-  const { apiBase } = getGhlConfig();
-  const response = await fetch(`${apiBase}${path}`, {
+type SyncConfig = Awaited<ReturnType<typeof getGhlConfig>>;
+
+function getHeaders(accessToken: string) {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    Version: "2021-07-28",
+    "Content-Type": "application/json"
+  };
+}
+
+async function ghlGet(path: string, config: SyncConfig) {
+  const response = await fetch(`${config.apiBase}${path}`, {
     method: "GET",
-    headers: getGhlHeaders()
+    headers: getHeaders(config.accessToken)
   });
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`GHL GET ${path} failed: ${response.status} ${text}`);
+    throw new Error(`Vynor App request ${path} failed: ${response.status} ${text}`);
   }
 
   return (await response.json()) as Record<string, unknown>;
 }
 
-async function fetchAllContacts(lastUpdatedAfter?: string) {
-  const { locationId } = getGhlConfig();
+async function fetchAllContacts(config: SyncConfig, lastUpdatedAfter?: string) {
+  const { locationId } = config;
   const limit = 100;
-  const maxPages = Number(process.env.GHL_CONTACT_SYNC_MAX_PAGES ?? "200");
+  const maxPages = config.contactSyncMaxPages;
   const out: RawContact[] = [];
   let page = 1;
   let startAfter: number | null = null;
@@ -95,7 +104,7 @@ async function fetchAllContacts(lastUpdatedAfter?: string) {
       query.set("page", String(page));
     }
 
-    const json = await ghlGet(`/contacts/?${query.toString()}`);
+    const json = await ghlGet(`/contacts/?${query.toString()}`, config);
     const contacts = unwrapArray<RawContact>(json, ["contacts", "data", "results"]);
     out.push(...contacts);
     if (contacts.length < limit) {
@@ -133,11 +142,21 @@ async function fetchAllContacts(lastUpdatedAfter?: string) {
 
 export async function syncGhlDataForSeller(
   sellerId: string,
+  organizationId: string,
   options?: { fullSync?: boolean }
 ): Promise<SyncSummary> {
   const warnings: string[] = [];
   const fullSync = options?.fullSync ?? false;
-  const cursorKey = `ghl:last-sync:${sellerId}`;
+  const cursorKey = `ghl:last-sync:${organizationId}:${sellerId}`;
+  const config = await getGhlConfig(organizationId);
+  const seller = await prisma.user.findUnique({
+    where: { id: sellerId },
+    select: { id: true, organizationId: true }
+  });
+
+  if (!seller || seller.organizationId !== organizationId) {
+    throw new Error("Seller not linked to the informed organization");
+  }
 
   let lastCursor: string | undefined;
   if (!fullSync) {
@@ -148,7 +167,7 @@ export async function syncGhlDataForSeller(
     }
   }
 
-  const contacts = await fetchAllContacts(lastCursor);
+  const contacts = await fetchAllContacts(config, lastCursor);
   for (const raw of contacts) {
     const ghlContactId = (raw.id || raw._id || "").toString().trim();
     if (!ghlContactId) {

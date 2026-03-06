@@ -9,7 +9,7 @@ export type DeviceLocation = {
 export async function getCurrentLocation(): Promise<DeviceLocation> {
   const permission = await Location.requestForegroundPermissionsAsync();
   if (permission.status !== "granted") {
-    throw new Error("Permissao de localizacao negada");
+    throw new Error("Permissão de localizacão negada");
   }
 
   const position = await Location.getCurrentPositionAsync({

@@ -36,10 +36,56 @@ export const UpdateClientSchema = z.object({
 export const RegisterSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
-  password: z.string().min(6)
+  password: z.string().min(6),
+  organizationSlug: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9-]{2,40}$/)
+    .optional()
 });
 
 export const LoginSchema = z.object({
-  email: z.string().email(),
+  accessMode: z.enum(["COMPANY", "MASTER"]).default("COMPANY"),
+  organizationSlug: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9-]{2,40}$/)
+    .optional(),
+  login: z.string().trim().min(3).max(80),
   password: z.string().min(6)
+});
+
+export const CreateOrganizationSchema = z.object({
+  name: z.string().min(2),
+  slug: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9-]{2,40}$/),
+  logoUrl: z.string().url().optional(),
+  ghlApiBaseUrl: z.string().url().optional(),
+  ghlLocationId: z.string().min(3).optional(),
+  ghlAccessToken: z.string().min(10).optional(),
+  ghlContactSyncMaxPages: z.number().int().min(1).max(2000).optional(),
+  ghlVisitsObjectKey: z.string().min(2).optional(),
+  ghlVisitsFieldClientNameKey: z.string().min(2).optional(),
+  ghlVisitsFieldOwnerKey: z.string().min(2).optional(),
+  ghlVisitsFieldVisitDateKey: z.string().min(2).optional(),
+  ghlVisitsFieldNotesKey: z.string().min(2).optional(),
+  ghlVisitsFieldTitleKey: z.string().min(2).optional(),
+  adminUser: z
+    .object({
+      name: z.string().min(2),
+      email: z.string().email(),
+      username: z
+        .string()
+        .trim()
+        .toLowerCase()
+        .regex(/^[a-z0-9._-]{3,40}$/)
+        .optional(),
+      password: z.string().min(6)
+    })
+    .optional()
 });

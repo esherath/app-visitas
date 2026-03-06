@@ -10,7 +10,9 @@ export async function POST(request: Request) {
 
   try {
     const body = (await request.json().catch(() => ({}))) as { fullSync?: boolean };
-    const result = await syncGhlDataForSeller(auth.userId, { fullSync: Boolean(body.fullSync) });
+    const result = await syncGhlDataForSeller(auth.userId, auth.organizationId, {
+      fullSync: Boolean(body.fullSync)
+    });
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     return NextResponse.json(

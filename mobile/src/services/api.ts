@@ -97,7 +97,7 @@ export async function syncGhlContacts(
   });
 
   if (!response.ok) {
-    throw new Error(`GHL sync failed: ${response.status}`);
+    throw new Error(`Vynor App sync failed: ${response.status}`);
   }
 
   return (await response.json()) as {
@@ -164,6 +164,26 @@ export type SellerItem = {
   ghlUserId?: string | null;
 };
 
+export type OrganizationItem = {
+  id: string;
+  name: string;
+  slug: string;
+  logoUrl?: string | null;
+  usersCount?: number;
+  ghlApiBaseUrl?: string | null;
+  ghlLocationId?: string | null;
+  hasGhlAccessToken?: boolean;
+  ghlContactSyncMaxPages?: number | null;
+  ghlVisitsObjectKey?: string | null;
+  ghlVisitsFieldClientNameKey?: string | null;
+  ghlVisitsFieldOwnerKey?: string | null;
+  ghlVisitsFieldVisitDateKey?: string | null;
+  ghlVisitsFieldNotesKey?: string | null;
+  ghlVisitsFieldTitleKey?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type AdminVisitItem = PendingVisit & {
   seller?: { id: string; name: string; email: string };
   client?: { id: string; name: string };
@@ -178,6 +198,21 @@ export async function fetchAdminSellers(ctx: RequestContext): Promise<SellerItem
   }
   const json = (await response.json()) as { sellers: SellerItem[] };
   return json.sellers;
+}
+
+export async function updateAdminSellerGhlUserId(
+  ctx: RequestContext,
+  payload: { sellerId: string; ghlUserId?: string | null }
+): Promise<void> {
+  const response = await fetch(withBase(ctx.apiBaseUrl, "/api/admin/sellers"), {
+    method: "PATCH",
+    headers: authHeaders(ctx.token),
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Update seller failed: ${response.status} ${text}`);
+  }
 }
 
 export async function fetchAdminVisits(
@@ -236,4 +271,86 @@ export async function fetchAdminVisits(
     client: item.client,
     seller: item.seller
   }));
+}
+
+export async function fetchOrganizations(ctx: RequestContext): Promise<OrganizationItem[]> {
+  const response = await fetch(withBase(ctx.apiBaseUrl, "/api/admin/organizations"), {
+    headers: authHeaders(ctx.token)
+  });
+  if (!response.ok) {
+    throw new Error(`Organizations API error ${response.status}`);
+  }
+  const json = (await response.json()) as { organizations: OrganizationItem[] };
+  return json.organizations;
+}
+
+export async function createOrganization(
+  ctx: RequestContext,
+  payload: {
+    name: string;
+    slug: string;
+    logoUrl?: string;
+    adminUser?: { name: string; email: string; password: string };
+    ghlApiBaseUrl?: string;
+    ghlLocationId?: string;
+    ghlAccessToken?: string;
+    ghlContactSyncMaxPages?: number;
+    ghlVisitsObjectKey?: string;
+    ghlVisitsFieldClientNameKey?: string;
+    ghlVisitsFieldOwnerKey?: string;
+    ghlVisitsFieldVisitDateKey?: string;
+    ghlVisitsFieldNotesKey?: string;
+    ghlVisitsFieldTitleKey?: string;
+  }
+): Promise<{
+  organization: OrganizationItem;
+  adminUser?: { id: string; name: string; email: string; role: string; organizationId: string };
+}> {
+  const response = await fetch(withBase(ctx.apiBaseUrl, "/api/admin/organizations"), {
+    method: "POST",
+    headers: authHeaders(ctx.token),
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Create organization failed: ${response.status} ${text}`);
+  }
+
+  const json = (await response.json()) as {
+    organization: OrganizationItem;
+    adminUser?: { id: string; name: string; email: string; role: string; organizationId: string };
+  };
+  return json;
+}
+
+export async function updateOrganization(
+  ctx: RequestContext,
+  payload: {
+    organizationId: string;
+    name?: string;
+    slug?: string;
+    logoUrl?: string | null;
+    ghlApiBaseUrl?: string | null;
+    ghlLocationId?: string | null;
+    ghlAccessToken?: string | null;
+    ghlContactSyncMaxPages?: number | null;
+    ghlVisitsObjectKey?: string | null;
+    ghlVisitsFieldClientNameKey?: string | null;
+    ghlVisitsFieldOwnerKey?: string | null;
+    ghlVisitsFieldVisitDateKey?: string | null;
+    ghlVisitsFieldNotesKey?: string | null;
+    ghlVisitsFieldTitleKey?: string | null;
+  }
+): Promise<{ organization: OrganizationItem }> {
+  const response = await fetch(withBase(ctx.apiBaseUrl, "/api/admin/organizations"), {
+    method: "PATCH",
+    headers: authHeaders(ctx.token),
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Update organization failed: ${response.status} ${text}`);
+  }
+
+  return (await response.json()) as { organization: OrganizationItem };
 }

@@ -1,16 +1,20 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { hasRole, requireAuth, unauthorized } from "@/lib/auth";
+import { hasAnyRole, requireAuth, unauthorized } from "@/lib/auth";
 
 export async function GET(request: Request) {
   const auth = requireAuth(request);
-  if (!hasRole(auth, "MASTER")) {
+  if (!auth) {
+    return unauthorized();
+  }
+  if (!hasAnyRole(auth, ["MASTER", "SUPER_ADMIN"])) {
     return unauthorized("Only master can access this resource");
   }
 
   const sellers = await prisma.user.findMany({
     where: {
-      role: "SELLER"
+      role: "SELLER",
+      organizationId: auth.organizationId
     },
     orderBy: { name: "asc" },
     select: {
@@ -26,7 +30,10 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
   const auth = requireAuth(request);
-  if (!hasRole(auth, "MASTER")) {
+  if (!auth) {
+    return unauthorized();
+  }
+  if (!hasAnyRole(auth, ["MASTER", "SUPER_ADMIN"])) {
     return unauthorized("Only master can access this resource");
   }
 
@@ -40,11 +47,14 @@ export async function PATCH(request: Request) {
 
     const seller = await prisma.user.findUnique({
       where: { id: sellerId },
-      select: { id: true, role: true }
+      select: { id: true, role: true, organizationId: true }
     });
 
     if (!seller || seller.role !== "SELLER") {
       return NextResponse.json({ ok: false, message: "Seller not found" }, { status: 404 });
+    }
+    if (seller.organizationId !== auth.organizationId) {
+      return unauthorized("Seller belongs to another organization");
     }
 
     await prisma.user.update({

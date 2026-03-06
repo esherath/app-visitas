@@ -1,6 +1,6 @@
 ﻿import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { createGhlContact, createGhlCustomObjectRecord } from "@/lib/ghl";
+import { createGhlContact, createGhlCustomObjectRecord, getGhlConfig } from "@/lib/ghl";
 import { SyncRequestSchema } from "@/lib/validation";
 import { requireAuth, unauthorized } from "@/lib/auth";
 
@@ -68,13 +68,21 @@ function resolveFieldKey(value: string | null | undefined) {
   return parsed?.fieldKey ?? normalizeText(value);
 }
 
-function visitsObjectConfig() {
-  const rawObjectKey = normalizeText(process.env.GHL_VISITS_OBJECT_KEY);
-  const rawClientField = process.env.GHL_VISITS_FIELD_CLIENT_NAME_KEY;
-  const rawOwnerField = process.env.GHL_VISITS_FIELD_OWNER_KEY;
-  const rawVisitDateField = process.env.GHL_VISITS_FIELD_VISIT_DATE_KEY;
-  const rawNotesField = process.env.GHL_VISITS_FIELD_NOTES_KEY;
-  const rawTitleField = process.env.GHL_VISITS_FIELD_TITLE_KEY;
+function visitsObjectConfig(raw?: {
+  visitsObjectKey?: string;
+  visitsFieldClientNameKey?: string;
+  visitsFieldOwnerKey?: string;
+  visitsFieldVisitDateKey?: string;
+  visitsFieldNotesKey?: string;
+  visitsFieldTitleKey?: string;
+}) {
+  const rawObjectKey = normalizeText(raw?.visitsObjectKey) ?? normalizeText(process.env.GHL_VISITS_OBJECT_KEY);
+  const rawClientField = raw?.visitsFieldClientNameKey ?? process.env.GHL_VISITS_FIELD_CLIENT_NAME_KEY;
+  const rawOwnerField = raw?.visitsFieldOwnerKey ?? process.env.GHL_VISITS_FIELD_OWNER_KEY;
+  const rawVisitDateField =
+    raw?.visitsFieldVisitDateKey ?? process.env.GHL_VISITS_FIELD_VISIT_DATE_KEY;
+  const rawNotesField = raw?.visitsFieldNotesKey ?? process.env.GHL_VISITS_FIELD_NOTES_KEY;
+  const rawTitleField = raw?.visitsFieldTitleKey ?? process.env.GHL_VISITS_FIELD_TITLE_KEY;
 
   const parsedObjectFromObjectKey = parseCustomObjectToken(rawObjectKey);
   const parsedObjectFromClient = parseCustomObjectToken(rawClientField);
@@ -100,7 +108,7 @@ function visitsObjectConfig() {
 
   if (!objectKey || !clientField || !visitDateField || !notesField) {
     throw new Error(
-      "Missing GHL visit object env vars: GHL_VISITS_OBJECT_KEY (or {{ custom_objects.<obj>.<field> }}), GHL_VISITS_FIELD_CLIENT_NAME_KEY, GHL_VISITS_FIELD_VISIT_DATE_KEY, GHL_VISITS_FIELD_NOTES_KEY"
+      "Missing Vynor App visit object config. Check the object key and the required visit fields."
     );
   }
 
@@ -116,6 +124,7 @@ function visitsObjectConfig() {
 
 async function resolveClientForVisit(
   sellerId: string,
+  organizationId: string,
   item: {
     clientId: string;
     clientName?: string;
@@ -143,7 +152,8 @@ async function resolveClientForVisit(
     const createdContact = await createGhlContact({
       name: normalizeText(item.clientName) ?? existing.name,
       email: normalizeText(item.clientEmail),
-      phone: normalizeText(item.clientPhone)
+      phone: normalizeText(item.clientPhone),
+      organizationId
     });
 
     const updated = await prisma.client.update({
@@ -189,7 +199,8 @@ async function resolveClientForVisit(
     const createdContact = await createGhlContact({
       name: normalizeText(item.clientName) ?? "Contato sem nome",
       email: normalizeText(item.clientEmail),
-      phone: normalizeText(item.clientPhone)
+      phone: normalizeText(item.clientPhone),
+      organizationId
     });
 
     await prisma.ghlContact.upsert({
@@ -283,17 +294,29 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const payload = SyncRequestSchema.parse(body);
-    const objectConfig = visitsObjectConfig();
     const seller = await prisma.user.findUnique({
       where: { id: auth.userId },
-      select: { id: true, name: true, email: true, ghlUserId: true }
+      select: { id: true, name: true, email: true, ghlUserId: true, organizationId: true }
+    });
+    if (!seller || seller.organizationId !== auth.organizationId) {
+      return unauthorized();
+    }
+
+    const ghlConfig = await getGhlConfig(auth.organizationId);
+    const objectConfig = visitsObjectConfig({
+      visitsObjectKey: ghlConfig.visitsObjectKey,
+      visitsFieldClientNameKey: ghlConfig.visitsFieldClientNameKey,
+      visitsFieldOwnerKey: ghlConfig.visitsFieldOwnerKey,
+      visitsFieldVisitDateKey: ghlConfig.visitsFieldVisitDateKey,
+      visitsFieldNotesKey: ghlConfig.visitsFieldNotesKey,
+      visitsFieldTitleKey: ghlConfig.visitsFieldTitleKey
     });
 
     const results: SyncResult[] = [];
 
     for (const item of payload.visits) {
       try {
-        const resolvedClient = await resolveClientForVisit(auth.userId, {
+        const resolvedClient = await resolveClientForVisit(auth.userId, auth.organizationId, {
           clientId: item.clientId,
           clientName: item.clientName,
           clientEmail: item.clientEmail,
@@ -342,14 +365,14 @@ export async function POST(request: Request) {
             where: { id: visit.id },
             data: {
               status: "FAILED",
-              lastSyncError: "Client has no ghlContactId"
+              lastSyncError: "Cliente sem contato vinculado no Vynor App"
             }
           });
 
           results.push({
             localVisitId: item.localVisitId,
             success: false,
-            error: "Client has no ghlContactId"
+            error: "Cliente sem contato vinculado no Vynor App"
           });
           continue;
         }
@@ -368,7 +391,8 @@ export async function POST(request: Request) {
 
         const ghlVisitRecord = await createGhlCustomObjectRecord({
           objectKey: objectConfig.objectKey,
-          properties
+          properties,
+          organizationId: auth.organizationId
         });
 
         await prisma.visit.update({

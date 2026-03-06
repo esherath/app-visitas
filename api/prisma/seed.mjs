@@ -4,51 +4,74 @@ import bcrypt from "bcryptjs";
 const prisma = new PrismaClient();
 
 async function main() {
-  const passwordHash = await bcrypt.hash("123456", 10);
+  await prisma.ghlOpportunity.deleteMany();
+  await prisma.ghlContact.deleteMany();
+  await prisma.visit.deleteMany();
+  await prisma.client.deleteMany();
+  await prisma.syncCursor.deleteMany();
+  await prisma.user.deleteMany();
 
-  await prisma.user.upsert({
-    where: { id: "seller-demo-1" },
-    update: {
-      passwordHash
-    },
+  const trinit = await prisma.organization.upsert({
+    where: { slug: "trinit" },
+    update: { name: "Trinit" },
     create: {
-      id: "seller-demo-1",
-      name: "Vendedor Demo",
-      email: "seller-demo-1@placeholder.local",
-      passwordHash
+      id: "org-trinit-default",
+      name: "Trinit",
+      slug: "trinit"
     }
   });
 
-  await prisma.user.upsert({
-    where: { id: "master-demo-1" },
-    update: {
-      passwordHash
-    },
+  const vynor = await prisma.organization.upsert({
+    where: { slug: "vynor" },
+    update: { name: "Vynor" },
     create: {
-      id: "master-demo-1",
-      name: "Gerente Demo",
-      email: "master-demo-1@placeholder.local",
-      passwordHash,
-      role: "MASTER"
+      id: "org-vynor-master",
+      name: "Vynor",
+      slug: "vynor"
     }
   });
 
-  const clients = [
-    { externalRef: "demo-001", name: "Mercado Centro" },
-    { externalRef: "demo-002", name: "Loja Jardim" },
-    { externalRef: "demo-003", name: "Farmacia Bairro" }
+  const users = [
+    {
+      id: "trinit-master-andre",
+      name: "Andre Nadolny",
+      username: "andretrinit",
+      email: "andre.nadolny@trinit.local",
+      password: "andretrinit",
+      role: "MASTER",
+      organizationId: trinit.id
+    },
+    {
+      id: "trinit-seller-wedsley",
+      name: "Wedsley Kasprzak",
+      username: "wedsleytrinit",
+      email: "wedsley.kasprzak@trinit.local",
+      password: "wedsleytrinit",
+      role: "SELLER",
+      organizationId: trinit.id
+    },
+    {
+      id: "vynor-super-admin-jean",
+      name: "Jean Carlos",
+      username: "jeanvynor",
+      email: "jean.carlos@vynor.local",
+      password: "189088csxA#",
+      role: "SUPER_ADMIN",
+      organizationId: vynor.id
+    }
   ];
-  for (const client of clients) {
-    await prisma.client.upsert({
-      where: { externalRef: client.externalRef },
-      update: {
-        name: client.name,
-        sellerId: "seller-demo-1"
-      },
-      create: {
-        name: client.name,
-        externalRef: client.externalRef,
-        sellerId: "seller-demo-1"
+
+  for (const user of users) {
+    const passwordHash = await bcrypt.hash(user.password, 10);
+    await prisma.user.create({
+      data: {
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        email: user.email,
+        passwordHash,
+        role: user.role,
+        organizationId: user.organizationId
       }
     });
   }

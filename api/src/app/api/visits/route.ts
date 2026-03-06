@@ -52,19 +52,47 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, duplicated: true });
     }
 
-    await prisma.client.upsert({
+    const existingClient = await prisma.client.findUnique({
       where: { id: payload.clientId },
-      update: {
-        sellerId: auth.userId,
-        ghlContactId: payload.clientId
-      },
-      create: {
-        id: payload.clientId,
-        name: payload.clientId,
-        sellerId: auth.userId,
-        ghlContactId: payload.clientId
+      select: {
+        id: true,
+        sellerId: true,
+        seller: {
+          select: {
+            organizationId: true
+          }
+        }
       }
     });
+    if (
+      existingClient?.sellerId &&
+      existingClient.seller?.organizationId &&
+      existingClient.seller.organizationId !== auth.organizationId
+    ) {
+      return NextResponse.json(
+        { ok: false, message: "Client belongs to another organization" },
+        { status: 409 }
+      );
+    }
+
+    if (!existingClient) {
+      await prisma.client.create({
+        data: {
+          id: payload.clientId,
+          name: payload.clientId,
+          sellerId: auth.userId,
+          ghlContactId: payload.clientId
+        }
+      });
+    } else if (!existingClient.sellerId) {
+      await prisma.client.update({
+        where: { id: existingClient.id },
+        data: {
+          sellerId: auth.userId,
+          ghlContactId: payload.clientId
+        }
+      });
+    }
 
     const visit = await prisma.visit.create({
       data: {

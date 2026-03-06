@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { hasRole, requireAuth, unauthorized } from "@/lib/auth";
+import { hasAnyRole, requireAuth, unauthorized } from "@/lib/auth";
 
 function parseDateParam(value: string | null, end = false) {
   if (!value) {
@@ -20,7 +20,10 @@ function parseDateParam(value: string | null, end = false) {
 
 export async function GET(request: Request) {
   const auth = requireAuth(request);
-  if (!hasRole(auth, "MASTER")) {
+  if (!auth) {
+    return unauthorized();
+  }
+  if (!hasAnyRole(auth, ["MASTER", "SUPER_ADMIN"])) {
     return unauthorized("Only master can access this resource");
   }
 
@@ -33,6 +36,9 @@ export async function GET(request: Request) {
 
   const visits = await prisma.visit.findMany({
     where: {
+      seller: {
+        organizationId: auth.organizationId
+      },
       sellerId: sellerId || undefined,
       checkInAt:
         from || to

@@ -86,12 +86,31 @@ export async function POST(request: Request) {
         select: {
           id: true,
           name: true,
-          ghlContactId: true
+          ghlContactId: true,
+          seller: {
+            select: {
+              organizationId: true
+            }
+          }
         }
       });
 
       if (existingByRef) {
-        return NextResponse.json({ ok: true, client: existingByRef, duplicated: true });
+        if (existingByRef.seller?.organizationId !== auth.organizationId) {
+          return NextResponse.json(
+            { ok: false, message: "Client reference belongs to another organization" },
+            { status: 409 }
+          );
+        }
+        return NextResponse.json({
+          ok: true,
+          client: {
+            id: existingByRef.id,
+            name: existingByRef.name,
+            ghlContactId: existingByRef.ghlContactId
+          },
+          duplicated: true
+        });
       }
     }
 
@@ -100,7 +119,8 @@ export async function POST(request: Request) {
       const createdContact = await createGhlContact({
         name: payload.name.trim(),
         email: payload.email?.trim(),
-        phone: payload.phone?.trim()
+        phone: payload.phone?.trim(),
+        organizationId: auth.organizationId
       });
       ghlContactId = createdContact.id;
     }

@@ -7,19 +7,44 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Organization {
+  id                          String   @id @default(cuid())
+  name                        String
+  slug                        String   @unique
+  logoUrl                     String?
+  ghlApiBaseUrl               String?
+  ghlLocationId               String?
+  ghlAccessToken              String?
+  ghlContactSyncMaxPages      Int?
+  ghlVisitsObjectKey          String?
+  ghlVisitsFieldClientNameKey String?
+  ghlVisitsFieldOwnerKey      String?
+  ghlVisitsFieldVisitDateKey  String?
+  ghlVisitsFieldNotesKey      String?
+  ghlVisitsFieldTitleKey      String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+  users                       User[]
+}
+
 model User {
   id        String   @id @default(cuid())
   name      String
   email     String   @unique
+  username  String   @unique
   passwordHash String?
   role      String   @default("SELLER")
   ghlUserId String?
+  organizationId String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   visits    Visit[]
   clients   Client[]
   ghlContacts GhlContact[]
   ghlOpportunities GhlOpportunity[]
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, role])
 }
 
 model Client {

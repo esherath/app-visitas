@@ -106,14 +106,14 @@ export async function syncPendingVisits(apiBaseUrl: string, token: string) {
 export async function retryVisitSync(localVisitId: string, apiBaseUrl: string, token: string) {
   const netInfo = await NetInfo.fetch();
   if (!netInfo.isConnected) {
-    return { success: false, error: "Sem conexao com a internet." };
+    return { success: false, error: "Sem conexão com a internet." };
   }
 
   await syncPendingClients(apiBaseUrl, token);
 
   const visit = await getVisitByLocalVisitId(localVisitId);
   if (!visit) {
-    return { success: false, error: "Visita nao encontrada na fila local." };
+    return { success: false, error: "Visita não encontrada na fila local." };
   }
 
   await markVisitAsPending(localVisitId);

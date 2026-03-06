@@ -6,6 +6,7 @@ type TokenPayload = {
   userId: string;
   email: string;
   role: string;
+  organizationId: string;
 };
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -31,7 +32,17 @@ export function signAccessToken(payload: TokenPayload) {
 
 export function verifyAccessToken(token: string): TokenPayload {
   const decoded = jwt.verify(token, getSecret());
-  return decoded as TokenPayload;
+  const payload = decoded as Partial<TokenPayload>;
+  if (
+    !payload ||
+    typeof payload.userId !== "string" ||
+    typeof payload.email !== "string" ||
+    typeof payload.role !== "string" ||
+    typeof payload.organizationId !== "string"
+  ) {
+    throw new Error("Invalid token payload");
+  }
+  return payload as TokenPayload;
 }
 
 export function unauthorized(message = "Unauthorized") {
@@ -63,4 +74,12 @@ export function hasRole(auth: TokenPayload | null, role: string) {
     return false;
   }
   return auth.role.toUpperCase() === role.toUpperCase();
+}
+
+export function hasAnyRole(auth: TokenPayload | null, roles: string[]) {
+  if (!auth) {
+    return false;
+  }
+  const authRole = auth.role.toUpperCase();
+  return roles.some((role) => authRole === role.toUpperCase());
 }
